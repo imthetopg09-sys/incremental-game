@@ -1,0 +1,117 @@
+name: Build
+
+# Every push builds the Windows .exe. Pushes to the default branch also
+# publish it as the "Latest build" release, so this link always serves
+# the newest version:
+#   https://github.com/<owner>/<repo>/releases/latest/download/MidnightAgain.exe
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GODOT_VERSION: "4.7.2"
+  GODOT_RELEASE: stable
+  EXE_NAME: MidnightAgain.exe
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache Godot and export templates
+        id: cache-godot
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/godot
+            ~/.local/share/godot/export_templates
+          key: godot-${{ env.GODOT_VERSION }}-${{ env.GODOT_RELEASE }}-windows-v1
+
+      - name: Install Godot
+        if: steps.cache-godot.outputs.cache-hit != 'true'
+        run: |
+          base="https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-${GODOT_RELEASE}"
+          mkdir -p ~/godot
+          curl -fsSL --retry 3 -o /tmp/godot.zip "$base/Godot_v${GODOT_VERSION}-${GODOT_RELEASE}_linux.x86_64.zip"
+          unzip -q /tmp/godot.zip -d ~/godot
+          mv ~/godot/Godot_v${GODOT_VERSION}-${GODOT_RELEASE}_linux.x86_64 ~/godot/godot
+          # Only the Windows release template is needed; keep the cache small.
+          curl -fsSL --retry 3 -o /tmp/templates.tpz "$base/Godot_v${GODOT_VERSION}-${GODOT_RELEASE}_export_templates.tpz"
+          dest=~/.local/share/godot/export_templates/${GODOT_VERSION}.${GODOT_RELEASE}
+          mkdir -p "$dest"
+          unzip -q -j /tmp/templates.tpz templates/windows_release_x86_64.exe templates/version.txt -d "$dest"
+          rm /tmp/godot.zip /tmp/templates.tpz
+
+      - name: Add Godot to PATH
+        run: echo "$HOME/godot" >> "$GITHUB_PATH"
+
+      - name: Import project
+        run: godot --headless --path game --import
+
+      - name: Run tests
+        run: godot --headless --path game -s res://tests/run_tests.gd
+
+      - name: Export Windows .exe
+        run: |
+          mkdir -p build/windows
+          godot --headless --path game --export-release "Windows Desktop" "../build/windows/${EXE_NAME}"
+          test -s "build/windows/${EXE_NAME}"
+          file "build/windows/${EXE_NAME}"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-exe
+          path: build/windows/${{ env.EXE_NAME }}
+          retention-days: 14
+
+  smoke-test-windows:
+    needs: build
+    runs-on: windows-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-exe
+
+      - name: Launch the game headless for 300 frames
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath ".\$env:EXE_NAME" -ArgumentList '--headless','--quit-after','300' -PassThru
+          if (-not $p.WaitForExit(120000)) { $p.Kill(); throw "Game did not exit within 120 s" }
+          "Exit code: $($p.ExitCode)"
+          if ($p.ExitCode -ne 0) { throw "Game exited with code $($p.ExitCode)" }
+
+  publish:
+    needs: smoke-test-windows
+    if: github.event_name == 'push' && github.ref_name == github.event.repository.default_branch
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-exe
+
+      - name: Publish "Latest build" release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          version=$(sed -n 's/^config\/version="\(.*\)"/\1/p' game/project.godot)
+          gh release delete latest-build --cleanup-tag --yes || true
+          gh release create latest-build "${EXE_NAME}" \
+            --target "${GITHUB_SHA}" \
+            --latest \
+            --title "Midnight, Again v${version} (latest build)" \
+            --notes "Download **${EXE_NAME}** below and double-click it. Built from ${GITHUB_SHA::7}.
+
+          Windows may say it protected your PC because the game isn't signed yet: click **More info**, then **Run anyway**."
