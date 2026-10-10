@@ -7,6 +7,7 @@ extends RefCounted
 class Shadow:
 	var kind: String
 	var pos: Vector2
+	var prev_pos: Vector2  # position before the last step, for smooth drawing
 	var hp: float
 	var max_hp: float
 	var radius: float
@@ -19,6 +20,7 @@ class Shadow:
 	func _init(k: String, p: Vector2, ph: float) -> void:
 		kind = k
 		pos = p
+		prev_pos = p
 		phase = ph
 		var s: Dictionary = Tuning.SHADOWS[k]
 		hp = s["hp"]
@@ -32,6 +34,7 @@ class Shadow:
 var arena := Rect2(Vector2.ZERO, Tuning.ARENA_SIZE)
 var t := 0.0
 var player_pos: Vector2
+var prev_player_pos: Vector2
 var flame := Tuning.PLAYER_MAX_FLAME
 var max_flame := Tuning.PLAYER_MAX_FLAME
 var alive := true
@@ -55,6 +58,7 @@ func _init(echo_list: Array[EchoRecording] = [], seed_value: int = Tuning.NIGHT_
 	echoes = echo_list
 	_schedule = SpawnSchedule.new(seed_value, arena)
 	player_pos = arena.get_center()
+	prev_player_pos = player_pos
 	recording.run_number = run_number
 	recording.record_until(0.0, player_pos)
 
@@ -81,6 +85,9 @@ func step(dt: float, target: Vector2) -> void:
 	events.clear()
 	if is_over():
 		return
+	prev_player_pos = player_pos
+	for s in shadows:
+		s.prev_pos = s.pos
 	var prev_hour := NightClock.hour_index(t)
 	t += dt
 	var hour := NightClock.hour_index(t)
@@ -170,8 +177,9 @@ func _separate() -> void:
 					var b := shadows[j]
 					var d := b.pos - a.pos
 					var min_d := (a.radius + b.radius) * 0.9
-					var len := d.length()
-					if len < min_d and len > 0.001:
+					var len_sq := d.length_squared()
+					if len_sq < min_d * min_d and len_sq > 0.000001:
+						var len := sqrt(len_sq)
 						var push := d / len * (min_d - len) * 0.5
 						a.pos -= push
 						b.pos += push

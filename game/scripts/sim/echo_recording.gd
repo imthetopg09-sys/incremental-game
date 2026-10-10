@@ -17,20 +17,21 @@ var duration := 0.0
 var died := true
 var run_number := 0
 var burned := 0
-
-
-static func hue_for_run(run: int) -> Color:
-	return HUES[posmod(run - 1, HUES.size())]
+## Index into HUES, chosen when the Echo is kept so kept Echoes never share a color.
+var hue_index := -1
 
 
 func hue() -> Color:
-	return hue_for_run(run_number)
+	return HUES[posmod(hue_index if hue_index >= 0 else run_number - 1, HUES.size())]
 
 
 ## Records the position for every sample time up to `time`.
 func record_until(time: float, pos: Vector2) -> void:
-	while points.size() <= int(time * RATE):
+	# The epsilon absorbs float drift from accumulating dt, so sample i lands on
+	# the step at time i / RATE instead of one step late.
+	while points.size() <= int(time * RATE + 1e-6):
 		points.append(pos)
+	duration = maxf(duration, time)
 
 
 func finish(time: float, pos: Vector2, did_die: bool) -> void:
@@ -60,10 +61,11 @@ func path_between(from_time: float, to_time: float) -> PackedVector2Array:
 		return out
 	var a := clampi(int(ceil(maxf(from_time, 0.0) * RATE)), 0, points.size() - 1)
 	var b := clampi(int(floor(minf(to_time, duration) * RATE)), 0, points.size() - 1)
+	if b < a:
+		return out
+	out = points.slice(a, b + 1)
 	if from_time > 0.0 and from_time <= duration:
-		out.append(position_at(from_time))
-	for i in range(a, b + 1):
-		out.append(points[i])
+		out.insert(0, position_at(from_time))
 	if to_time < duration and to_time > 0.0:
 		out.append(position_at(to_time))
 	return out
@@ -74,7 +76,7 @@ func to_dict() -> Dictionary:
 	for p in points:
 		flat.append(p.x)
 		flat.append(p.y)
-	return {"points": flat, "duration": duration, "died": died, "run": run_number, "burned": burned}
+	return {"points": flat, "duration": duration, "died": died, "run": run_number, "burned": burned, "hue": hue_index}
 
 
 static func from_dict(d: Dictionary) -> EchoRecording:
@@ -86,4 +88,5 @@ static func from_dict(d: Dictionary) -> EchoRecording:
 	r.died = d.get("died", true)
 	r.run_number = d.get("run", 0)
 	r.burned = d.get("burned", 0)
+	r.hue_index = d.get("hue", -1)
 	return r

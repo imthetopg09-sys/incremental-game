@@ -26,7 +26,7 @@ func try_keep(rec: EchoRecording) -> bool:
 	best_time = maxf(best_time, rec.duration)
 	if needs_choice():
 		return false
-	echoes.append(rec)
+	_add(rec)
 	return true
 
 
@@ -35,7 +35,16 @@ func let_go_of(chosen: EchoRecording, new_rec: EchoRecording) -> void:
 	let_go.append(chosen)
 	if chosen != new_rec:
 		echoes.erase(chosen)
-		echoes.append(new_rec)
+		_add(new_rec)
+
+
+## Adds an Echo with the first color no other kept Echo is using.
+func _add(rec: EchoRecording) -> void:
+	var used := echoes.map(func(e): return e.hue_index)
+	rec.hue_index = 0
+	while used.has(rec.hue_index) and rec.hue_index < EchoRecording.HUES.size() - 1:
+		rec.hue_index += 1
+	echoes.append(rec)
 
 
 func begin_next_run() -> void:
@@ -51,5 +60,5 @@ func make_demo_echoes(count: int) -> void:
 		var bot := Bot.new("kite")
 		while not sim.is_over():
 			sim.step(1.0 / 30.0, bot.steer(sim))
-		echoes.append(sim.recording)
+		_add(sim.recording)
 		run_number += 1

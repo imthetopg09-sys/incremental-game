@@ -7,6 +7,7 @@ const LIGHT_FOLLOW := 12.0
 const LIGHT_COLOR := Color(1.0, 0.68, 0.32)
 
 @onready var night: ColorRect = $Night
+@onready var lantern: Control = $Lantern
 @onready var version_label: Label = $Version
 
 var _light_pos := Vector2.ZERO
@@ -15,7 +16,8 @@ var _starting := false
 
 
 func _ready() -> void:
-	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	Input.mouse_mode = Input.MOUSE_MODE_HIDDEN
+	lantern.draw.connect(_draw_lantern)
 	version_label.text = "v%s" % ProjectSettings.get_setting("application/config/version", "0.0.0")
 	_light_pos = size * 0.5
 	var mat := night.material as ShaderMaterial
@@ -35,6 +37,13 @@ func _process(delta: float) -> void:
 	var mat := night.material as ShaderMaterial
 	mat.set_shader_parameter("lights", PackedVector4Array([Vector4(_light_pos.x, _light_pos.y, _radius * flicker, 1.0)]))
 	mat.set_shader_parameter("rect_size", night.size)
+	lantern.queue_redraw()
+
+
+func _draw_lantern() -> void:
+	lantern.draw_circle(_light_pos, 10.0, LIGHT_COLOR)
+	lantern.draw_circle(_light_pos, 5.0, Color(1.0, 0.97, 0.88))
+	lantern.draw_arc(_light_pos, 12.5, 0.0, TAU, 28, Color(1, 1, 1, 0.9), 1.5, true)
 
 
 func _gui_input(event: InputEvent) -> void:
