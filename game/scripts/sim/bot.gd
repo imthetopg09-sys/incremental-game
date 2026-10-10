@@ -43,3 +43,30 @@ func steer(sim: NightSim) -> Vector2:
 	# Smooth the heading like a hand on a mouse would, instead of jittering.
 	_dir = _dir.lerp(push.normalized(), 0.12)
 	return p + _dir.normalized() * 120.0
+
+
+## Picks a Boon from the night's offer: Moths and Chain Spark first.
+func pick_boon(sim: NightSim) -> String:
+	var choices := sim.offer()
+	for id in ["moths", "spark", "candle", "flare"]:
+		if choices.has(id):
+			return id
+	return choices[0] if not choices.is_empty() else ""
+
+
+## Spends Tallow the way a sensible player might: cheapest useful upgrade first.
+static func shop(gs) -> void:
+	var order := ["foresight", "thick_wick", "hot_flame", "wide_glow", "extra_sconce", "kindling", "rendering_vat", "afterglow"]
+	var bought := true
+	while bought:
+		bought = false
+		var best := ""
+		var best_cost := 1 << 30
+		for id in order:
+			var cost := Upgrades.next_cost(id, gs.level(id))
+			if cost >= 0 and cost <= gs.tallow and cost < best_cost:
+				best = id
+				best_cost = cost
+		if best != "":
+			gs.buy(best)
+			bought = true

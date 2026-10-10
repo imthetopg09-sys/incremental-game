@@ -31,8 +31,15 @@ func test_recording_round_trip(t) -> void:
 	for i in 10:
 		r.record_until(i / EchoRecording.RATE, Vector2(i * 3, i * 2))
 	r.finish(9 / EchoRecording.RATE, Vector2(27, 18), false)
-	var back := EchoRecording.from_dict(r.to_dict())
+	r.picks.append({"t": 0.1, "boon": "moths"})
+	var braided := EchoRecording.new()
+	braided.record_until(0.0, Vector2(5, 5))
+	r.chorus.append(braided)
+	# Through real JSON text, the way the save file stores it.
+	var back := EchoRecording.from_dict(JSON.parse_string(JSON.stringify(r.to_dict())))
 	t.check(back.points == r.points and back.run_number == 4 and back.burned == 12 and back.died == false, "round trip keeps data")
+	t.check(back.picks.size() == 1 and back.picks[0]["boon"] == "moths", "keeps boon picks")
+	t.check(back.chorus.size() == 1 and back.chorus[0].points[0] == Vector2(5, 5), "keeps braided runs")
 
 
 func test_clock_labels(t) -> void:

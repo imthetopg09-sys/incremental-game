@@ -44,3 +44,35 @@ const SPAWNS := {
 	"bloat": {"start": 120.0, "base": 7.0, "ramp": 80.0, "min": 1.6},
 }
 const SPAWN_MARGIN := 30.0
+
+# Embers (in-night XP) and Tallow (kept between nights) per shadow burned, by kind.
+# Burns by Echoes count too: your army feeds you.
+const EMBERS_PER_KIND := {"wisp": 2, "creeper": 2, "bloat": 6, "mite": 1}
+const TALLOW_PER_KIND := {"wisp": 0.25, "creeper": 0.3, "bloat": 1.0, "mite": 0.1}
+## Embers needed to go from level n to n + 1:
+## LEVEL_BASE + LEVEL_STEP * (n - 1) + LEVEL_CURVE * (n - 1)^2.
+const LEVEL_BASE := 12
+const LEVEL_STEP := 10
+const LEVEL_CURVE := 2
+## Shadows your Echoes burn pay this fraction of their Embers.
+const ECHO_EMBER_SHARE := 0.5
+
+# Boons. Damage numbers are per level unless noted and scale with Hot Flame.
+const FLARE_INTERVAL := 1.4  # seconds between bolts, divided by (1 + 0.25 * (level - 1))
+const FLARE_DAMAGE := 12.0
+const FLARE_SPEED := 420.0
+const FLARE_RANGE := 320.0
+const MOTHS_BASE := 1  # moths at level 1; +1 per level
+const MOTH_ORBIT := 48.0
+const MOTH_SPEED := 3.2  # radians per second
+const MOTH_RADIUS := 7.0
+const MOTH_DPS := 10.0
+const CANDLE_INTERVAL := 0.22
+const CANDLE_LIFE := 2.0  # + 0.4 s per level
+const CANDLE_RADIUS := 15.0
+const CANDLE_DPS := 5.0  # + 2 per level
+const SPARK_INTERVAL := 1.3
+const SPARK_RANGE := 190.0
+const SPARK_JUMP := 130.0
+const SPARK_JUMPS := 2  # + 1 per level
+const SPARK_DAMAGE := 9.0  # + 3 per level

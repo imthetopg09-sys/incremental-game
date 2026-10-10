@@ -19,6 +19,28 @@ var run_number := 0
 var burned := 0
 ## Index into HUES, chosen when the Echo is kept so kept Echoes never share a color.
 var hue_index := -1
+## Boons drafted during the run, replayed by the Echo at the same moments:
+## [{"t": seconds, "boon": id}], in time order.
+var picks: Array[Dictionary] = []
+## Other runs braided into this one (a Chorus): they share its Sconce and color.
+var chorus: Array[EchoRecording] = []
+
+
+## Boon levels this run had reached by `time`.
+func boons_at(time: float) -> Dictionary:
+	var out := {}
+	for p in picks:
+		if p["t"] > time:
+			break
+		out[p["boon"]] = out.get(p["boon"], 0) + 1
+	return out
+
+
+## This Echo and every run braided into it.
+func members() -> Array[EchoRecording]:
+	var out: Array[EchoRecording] = [self]
+	out.append_array(chorus)
+	return out
 
 
 func hue() -> Color:
@@ -71,22 +93,38 @@ func path_between(from_time: float, to_time: float) -> PackedVector2Array:
 	return out
 
 
+## JSON-safe form. Points are stored as quarter-pixel int16 pairs in base64, so a
+## full-night run is about 57 KB of text instead of a few hundred KB of numbers.
 func to_dict() -> Dictionary:
-	var flat := PackedFloat32Array()
-	for p in points:
-		flat.append(p.x)
-		flat.append(p.y)
-	return {"points": flat, "duration": duration, "died": died, "run": run_number, "burned": burned, "hue": hue_index}
+	var bytes := PackedByteArray()
+	bytes.resize(points.size() * 4)
+	for i in points.size():
+		bytes.encode_s16(i * 4, clampi(roundi(points[i].x * 4.0), -32768, 32767))
+		bytes.encode_s16(i * 4 + 2, clampi(roundi(points[i].y * 4.0), -32768, 32767))
+	return {
+		"points": Marshalls.raw_to_base64(bytes),
+		"duration": duration,
+		"died": died,
+		"run": run_number,
+		"burned": burned,
+		"hue": hue_index,
+		"picks": picks.duplicate(true),
+		"chorus": chorus.map(func(c): return c.to_dict()),
+	}
 
 
 static func from_dict(d: Dictionary) -> EchoRecording:
 	var r := EchoRecording.new()
-	var flat: PackedFloat32Array = d.get("points", PackedFloat32Array())
-	for i in range(0, flat.size() - 1, 2):
-		r.points.append(Vector2(flat[i], flat[i + 1]))
-	r.duration = d.get("duration", 0.0)
-	r.died = d.get("died", true)
-	r.run_number = d.get("run", 0)
-	r.burned = d.get("burned", 0)
-	r.hue_index = d.get("hue", -1)
+	var bytes := Marshalls.base64_to_raw(str(d.get("points", "")))
+	for i in range(0, bytes.size() - 3, 4):
+		r.points.append(Vector2(bytes.decode_s16(i), bytes.decode_s16(i + 2)) / 4.0)
+	r.duration = float(d.get("duration", 0.0))
+	r.died = bool(d.get("died", true))
+	r.run_number = int(d.get("run", 0))
+	r.burned = int(d.get("burned", 0))
+	r.hue_index = int(d.get("hue", -1))
+	for p in d.get("picks", []):
+		r.picks.append({"t": float(p.get("t", 0.0)), "boon": str(p.get("boon", ""))})
+	for c in d.get("chorus", []):
+		r.chorus.append(EchoRecording.from_dict(c))
 	return r

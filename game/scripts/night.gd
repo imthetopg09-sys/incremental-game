@@ -6,7 +6,7 @@ extends Node2D
 ## Echoes, lantern), FX (foresight dots, burn rings), Dim and Develop (the end-of-run
 ## route), then the HUD.
 
-enum State { PLAYING, PAUSED, DEVELOPING, CHOOSING, WAITING }
+enum State { PLAYING, PAUSED, LEVEL_UP, DEVELOPING, CHOOSING, WAITING }
 
 const PLAYER_COLOR := Color(1.0, 0.72, 0.36)
 const SHADOW_BODY := Color(0, 0, 0)
@@ -56,6 +56,9 @@ var _paused_at := 0.0
 var _highlight: EchoRecording = null
 var _render_time := 0.0
 var _mouse_steer := true
+var _sparks: Array[Dictionary] = []  # {points, age, color}
+var _level_panel: PanelContainer = null
+var _tallow_earned := 0
 ## Dev flags (pass after `--` on the command line): --autopilot, --demo-echoes=N,
 ## --skip-to=SECONDS. Used for screenshots and footage.
 var _autopilot: Bot = null
@@ -68,12 +71,14 @@ func _ready() -> void:
 	for a in args:
 		if a.begins_with("--demo-echoes=") and GameState.run_number == 1:
 			GameState.make_demo_echoes(int(a.get_slice("=", 1)))
-	sim = NightSim.new(GameState.echoes.duplicate(), Tuning.NIGHT_SEED, GameState.run_number)
+	sim = NightSim.new(GameState.all_recordings(), Tuning.NIGHT_SEED, GameState.run_number, GameState.stats())
 	for a in args:
 		if a.begins_with("--skip-to="):
 			var until := float(a.get_slice("=", 1))
 			var bot := Bot.new("kite")
 			while sim.t < until and not sim.is_over():
+				if sim.pending_level_ups > 0:
+					sim.pick_boon(bot.pick_boon(sim))
 				sim.step(1.0 / 60.0, bot.steer(sim))
 			if sim.is_over():
 				_end_run.call_deferred(not sim.alive)
@@ -87,6 +92,9 @@ func _ready() -> void:
 	Input.mouse_mode = Input.MOUSE_MODE_HIDDEN
 	_show_toast("Run %d. It is midnight." % GameState.run_number if GameState.run_number > 1 else "It is midnight. It is always midnight.")
 	_update_hud()
+	Sfx.strike()
+	if state == State.PLAYING:
+		_check_level_up.call_deferred()
 
 
 func _exit_tree() -> void:
@@ -105,6 +113,7 @@ func _physics_process(delta: float) -> void:
 	sim.step(delta, _steer_target())
 	for e in sim.events:
 		_on_event(e)
+	_check_level_up()
 
 
 func _process(delta: float) -> void:
@@ -112,6 +121,9 @@ func _process(delta: float) -> void:
 	for fx in _fx:
 		fx["age"] += delta
 	_fx = _fx.filter(func(fx): return fx["age"] < FX_LIFE)
+	for sp in _sparks:
+		sp["age"] += delta
+	_sparks = _sparks.filter(func(sp): return sp["age"] < 0.25)
 	_toast_time += delta
 	if state == State.PAUSED:
 		toast_label.modulate.a = 1.0
@@ -164,11 +176,19 @@ func _on_event(e: Dictionary) -> void:
 		"burn":
 			var color := PLAYER_COLOR if e["light"] < 0 else sim.echoes[e["light"]].hue()
 			_fx.append({"pos": e["pos"], "age": 0.0, "color": color, "big": e["kind"] == "bloat"})
+			Sfx.burn(-1 if e["light"] < 0 else sim.echoes[e["light"]].hue_index, e["kind"] == "bloat")
+		"spark":
+			var color := PLAYER_COLOR if e["light"] < 0 else sim.echoes[e["light"]].hue()
+			_sparks.append({"points": e["points"], "age": 0.0, "color": color})
+		"level_up":
+			Sfx.level_up()
 		"hour":
 			_show_toast(HOUR_LINES.get(e["hour"], ""))
 		"death":
+			Sfx.death()
 			_end_run(true)
 		"dawn":
+			Sfx.dawn()
 			_end_run(false)
 
 
@@ -189,6 +209,83 @@ func _set_paused(on: bool) -> void:
 		_toast_time = 2.5
 
 
+# --- Level-ups ------------------------------------------------------------------
+
+## Pauses the night and offers three Boons whenever a level-up is waiting.
+func _check_level_up() -> void:
+	if sim.pending_level_ups <= 0 or sim.is_over() or state != State.PLAYING:
+		return
+	if _autopilot != null:
+		while sim.pending_level_ups > 0:
+			sim.pick_boon(_autopilot.pick_boon(sim))
+		return
+	state = State.LEVEL_UP
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	_show_level_choices()
+
+
+func _show_level_choices() -> void:
+	if _level_panel != null:
+		_level_panel.queue_free()
+	_level_panel = PanelContainer.new()
+	_level_panel.add_theme_stylebox_override("panel", _choice_box(PLAYER_COLOR, 0.0, 0.88))
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 12)
+	_level_panel.add_child(box)
+	var title := Label.new()
+	title.text = "The flame grows. Choose a Boon." if sim.t > 0.0 else "Kindling. Choose a Boon."
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.add_theme_font_size_override("font_size", 26)
+	title.add_theme_color_override("font_color", Color(1, 0.86, 0.62))
+	box.add_child(title)
+	var note := Label.new()
+	note.text = "Your Echo will take the same Boon at this moment, every night."
+	note.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	note.add_theme_font_size_override("font_size", 15)
+	note.add_theme_color_override("font_color", Color(0.85, 0.78, 0.68, 0.75))
+	box.add_child(note)
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 14)
+	box.add_child(row)
+	var offer := sim.offer()
+	for i in offer.size():
+		var id: String = offer[i]
+		var info := Upgrades.boon(id)
+		var lv: int = sim.boons.get(id, 0)
+		var b := Button.new()
+		b.custom_minimum_size = Vector2(250, 150)
+		b.text = "%s\n\n%s\n\n%s   [%d]" % [info["name"], info["desc"],
+			"New" if lv == 0 else "Level %d" % (lv + 1), i + 1]
+		b.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		b.add_theme_font_size_override("font_size", 18)
+		b.add_theme_color_override("font_color", Color(1, 0.9, 0.75))
+		b.add_theme_color_override("font_hover_color", Color(1, 0.97, 0.9))
+		b.add_theme_stylebox_override("normal", _choice_box(PLAYER_COLOR, 0.25))
+		b.add_theme_stylebox_override("hover", _choice_box(PLAYER_COLOR, 0.8))
+		b.add_theme_stylebox_override("focus", _choice_box(PLAYER_COLOR, 0.8))
+		b.add_theme_stylebox_override("pressed", _choice_box(PLAYER_COLOR, 1.0))
+		b.pressed.connect(func(): _pick(id))
+		row.add_child(b)
+	$HUD.add_child(_level_panel)
+	_level_panel.reset_size()
+	_level_panel.position = (Tuning.ARENA_SIZE - _level_panel.size) * 0.5
+	_level_panel.set_meta("offer", offer)
+
+
+func _pick(id: String) -> void:
+	if state != State.LEVEL_UP:
+		return
+	Sfx.ui_click()
+	sim.pick_boon(id)
+	if sim.pending_level_ups > 0:
+		_show_level_choices()
+		return
+	_level_panel.queue_free()
+	_level_panel = null
+	state = State.PLAYING
+	Input.mouse_mode = Input.MOUSE_MODE_HIDDEN
+
+
 # --- End of a run ---------------------------------------------------------------
 
 func _end_run(died: bool) -> void:
@@ -203,12 +300,13 @@ func _end_run(died: bool) -> void:
 	entities.queue_redraw()
 	fx_layer.queue_redraw()
 	develop.queue_redraw()
+	_tallow_earned = GameState.award(sim.burned_by_kind)
 	if died:
 		overlay_title.text = "Midnight, again."
-		overlay_body.text = "You held the night until %s.   %d shadows burned." % [NightClock.label(rec.duration), sim.burned]
+		overlay_body.text = "You held the night until %s.   %d shadows burned.   +%d Tallow" % [NightClock.label(rec.duration), sim.burned, _tallow_earned]
 	else:
 		overlay_title.text = "6:00 AM. You held the night."
-		overlay_body.text = "Dawn is coming. %d shadows burned." % sim.burned
+		overlay_body.text = "Dawn is coming. %d shadows burned.   +%d Tallow" % [sim.burned, _tallow_earned]
 	await get_tree().create_timer(1.0).timeout
 	if GameState.try_keep(rec):
 		overlay_body.text += "\nThis run will walk beside you as an Echo."
@@ -249,12 +347,26 @@ func _show_choices(new_rec: EchoRecording) -> void:
 		choices.add_child(b)
 
 
-func _choice_box(hue: Color, border_alpha: float) -> StyleBoxFlat:
+## Saves the end-of-run screen as a PNG in the player's Pictures folder.
+func _save_postcard() -> void:
+	var img := get_viewport().get_texture().get_image()
+	var dir := OS.get_system_dir(OS.SYSTEM_DIR_PICTURES)
+	if dir == "":
+		dir = OS.get_user_data_dir()
+	var path := dir.path_join("Midnight Again - Run %d.png" % sim.recording.run_number)
+	if img.save_png(path) == OK:
+		_show_toast("Postcard saved to %s" % path)
+	else:
+		_show_toast("Could not save the postcard.")
+
+
+func _choice_box(hue: Color, border_alpha: float, bg_alpha := 0.06) -> StyleBoxFlat:
 	var box := StyleBoxFlat.new()
-	box.bg_color = Color(hue, 0.06)
+	box.bg_color = Color(hue, bg_alpha) if bg_alpha < 0.5 else Color(0.015, 0.012, 0.02, bg_alpha)
 	box.border_color = Color(hue, border_alpha)
 	box.set_border_width_all(2)
 	box.set_corner_radius_all(8)
+	box.set_content_margin_all(14)
 	return box
 
 
@@ -263,13 +375,17 @@ func _choose(chosen: EchoRecording, new_rec: EchoRecording) -> void:
 	_next_run()
 
 
+## After a night: on to the Lamp Tree, where the next night is lit.
 func _next_run() -> void:
 	GameState.begin_next_run()
-	get_tree().reload_current_scene()
+	get_tree().change_scene_to_file("res://scenes/lamp_tree.tscn")
 
 
 func _unhandled_input(event: InputEvent) -> void:
 	var click: bool = event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT
+	if overlay.visible and event is InputEventKey and event.pressed and event.keycode == KEY_P:
+		_save_postcard()
+		return
 	match state:
 		State.PLAYING:
 			if event.is_action_pressed("ui_cancel"):
@@ -280,6 +396,12 @@ func _unhandled_input(event: InputEvent) -> void:
 				_set_paused(false)
 			elif event is InputEventKey and event.pressed and event.keycode == KEY_Q:
 				get_tree().quit()
+		State.LEVEL_UP:
+			if event is InputEventKey and event.pressed and _level_panel != null:
+				var idx: int = event.keycode - KEY_1
+				var offer: Array = _level_panel.get_meta("offer", [])
+				if idx >= 0 and idx < offer.size():
+					_pick(offer[idx])
 		State.WAITING:
 			if _overlay_time > 1.0 and (click or event.is_action_pressed("ui_accept")):
 				_next_run()
@@ -321,8 +443,24 @@ func _update_lights() -> void:
 				break
 			var e := sim.echoes[i].position_at(t)
 			var c := sim.echoes[i].hue()
-			lights.append(Vector4(e.x, e.y, Tuning.ECHO_LIGHT_RADIUS, ECHO_LIGHT))
+			lights.append(Vector4(e.x, e.y, sim.echo_light_radius(), ECHO_LIGHT))
 			colors.append(Vector4(c.r, c.g, c.b, 1.0))
+		for i in sim.glowing_echoes():
+			if lights.size() >= 16:
+				break
+			var rec := sim.echoes[i]
+			var g := rec.position_at(rec.duration)
+			var c := rec.hue()
+			lights.append(Vector4(g.x, g.y, sim.echo_light_radius() * 0.8, ECHO_LIGHT * 0.7))
+			colors.append(Vector4(c.r, c.g, c.b, 1.0))
+		for w in sim.wax:
+			if lights.size() >= 16:
+				break
+			# Only the freshest wax adds light; the rest is drawn as glowing pools.
+			if w["age"] < 0.5:
+				var c := PLAYER_COLOR if w["light"] < 0 else sim.echoes[w["light"]].hue()
+				lights.append(Vector4(w["pos"].x, w["pos"].y, Tuning.CANDLE_RADIUS * 2.0, 0.25))
+				colors.append(Vector4(c.r, c.g, c.b, 1.0))
 	var mat := background.material as ShaderMaterial
 	mat.set_shader_parameter("lights", lights)
 	mat.set_shader_parameter("light_colors", colors)
@@ -360,6 +498,12 @@ func _draw_trails() -> void:
 			if recent.size() >= 2:
 				trails.draw_polyline(recent, Color(c, 0.3), 3.0, true)
 
+	for w in sim.wax:
+		var c := PLAYER_COLOR if w["light"] < 0 else sim.echoes[w["light"]].hue()
+		var k: float = w["age"] / w["life"]
+		trails.draw_circle(w["pos"], Tuning.CANDLE_RADIUS * (0.7 + 0.3 * k), Color(c, 0.22 * (1.0 - k)))
+		trails.draw_circle(w["pos"], Tuning.CANDLE_RADIUS * 0.35, Color(1, 0.95, 0.8, 0.25 * (1.0 - k)))
+
 	var mine := sim.recording.path_between(maxf(0.0, t - 2.5), sim.t)
 	mine.append(_player_draw_pos())
 	if mine.size() >= 2:
@@ -375,16 +519,43 @@ func _draw_fx() -> void:
 			if rec.is_active(t):
 				var steps := 10
 				for k in range(1, steps + 1):
-					var ft := t + Tuning.FORESIGHT_SECONDS * k / steps
+					var ft: float = t + sim.stats["foresight"] * k / steps
 					if ft > rec.duration:
 						break
 					fx_layer.draw_circle(rec.position_at(ft), 2.2, Color(c, 0.55 * (1.0 - float(k) / (steps + 1))))
-				if rec.died and rec.duration - t < Tuning.FORESIGHT_SECONDS:
+				if rec.died and rec.duration - t < sim.stats["foresight"]:
 					fx_layer.draw_arc(rec.position_at(rec.duration), 9.0, 0.0, TAU, 20, Color(c, 0.5), 1.5, true)
 			elif rec.died and t - rec.duration < SPENT_FADE:
 				# A small ring marks where a spent Echo went out.
 				var a := 1.0 - (t - rec.duration) / SPENT_FADE
 				fx_layer.draw_arc(rec.position_at(rec.duration), 9.0, 0.0, TAU, 20, Color(c, 0.45 * a), 1.5, true)
+	if _live():
+		for c in sim.casters:
+			var hue: Color = PLAYER_COLOR if c["light"] < 0 else sim.echoes[c["light"]].hue()
+			var a := 1.0 if c["light"] < 0 else 0.6
+			for m in sim.moth_positions(c):
+				var flap := 0.6 + 0.4 * absf(sin(_render_time * 18.0 + m.x * 0.05))
+				fx_layer.draw_circle(m, Tuning.MOTH_RADIUS * 0.9, Color(hue, 0.25 * a))
+				fx_layer.draw_circle(m, 2.5 * flap + 1.0, Color(1, 0.95, 0.85, 0.85 * a))
+		for b in sim.bolts:
+			var hue: Color = PLAYER_COLOR if b["light"] < 0 else sim.echoes[b["light"]].hue()
+			var p: Vector2 = b["prev_pos"].lerp(b["pos"], _frac())
+			var dir: Vector2 = (b["pos"] - b["prev_pos"])
+			fx_layer.draw_line(p - dir * 2.5, p, Color(hue, 0.6), 3.0, true)
+			fx_layer.draw_circle(p, 3.5, Color(1, 0.97, 0.9, 0.95))
+	for sp in _sparks:
+		var a: float = 1.0 - sp["age"] / 0.25
+		var pts: PackedVector2Array = sp["points"]
+		var jag := PackedVector2Array()
+		for i in pts.size() - 1:
+			jag.append(pts[i])
+			var mid := pts[i].lerp(pts[i + 1], 0.5)
+			var n := (pts[i + 1] - pts[i]).orthogonal().normalized()
+			jag.append(mid + n * sin(_render_time * 70.0 + i * 3.0) * 9.0)
+		jag.append(pts[pts.size() - 1])
+		fx_layer.draw_polyline(jag, Color(sp["color"], 0.5 * a), 4.0, true)
+		fx_layer.draw_polyline(jag, Color(1, 1, 1, 0.9 * a), 1.5, true)
+
 	for fx in _fx:
 		var k: float = fx["age"] / FX_LIFE
 		var r: float = lerpf(6.0, 34.0 if fx["big"] else 22.0, k)
@@ -479,6 +650,10 @@ func _draw_flame_bar() -> void:
 	var low := f < 0.3 and int(_render_time * 4.0) % 2 == 0
 	flame_bar.draw_rect(Rect2(Vector2.ZERO, Vector2(size.x * f, size.y)), Color(1.0, 0.35, 0.2) if low else PLAYER_COLOR)
 	flame_bar.draw_rect(Rect2(Vector2.ZERO, size).grow(1.0), Color(0, 0, 0, 0.6), false, 1.0)
+	# Embers toward the next level, as a thin line under the flame.
+	var e := clampf(float(sim.embers) / sim.embers_for_next_level(), 0.0, 1.0)
+	flame_bar.draw_rect(Rect2(Vector2(0, size.y + 3.0), Vector2(size.x, 2.0)), Color(1, 1, 1, 0.12))
+	flame_bar.draw_rect(Rect2(Vector2(0, size.y + 3.0), Vector2(size.x * e, 2.0)), Color(1.0, 0.86, 0.55, 0.9))
 
 
 ## HUD labels fade when the lantern passes under them, so neither hides the other.
@@ -496,4 +671,4 @@ func _update_hud() -> void:
 		run_label.text = "Run %d    no Echoes yet" % GameState.run_number
 	else:
 		run_label.text = "Run %d    %d of %d Echoes lit" % [GameState.run_number, lit, sim.echoes.size()]
-	burned_label.text = "%d burned" % sim.burned
+	burned_label.text = "Lv %d    %d burned" % [sim.level, sim.burned]
