@@ -13,9 +13,22 @@ var total_burned := 0
 ## Lamp Tree levels by node id.
 var tree_levels := {}
 
+## Where progress is saved, and whether changes save themselves (tests turn it off).
+var save_path := SaveGame.PATH
+var autosave := true
+
 ## Each braid costs this much Tallow per run already in the Chorus.
 const BRAID_COST := 40
 const CHORUS_MAX := 3
+
+
+func _ready() -> void:
+	SaveGame.load_into(self, save_path)
+
+
+func save() -> void:
+	if autosave:
+		SaveGame.save(self, save_path)
 
 
 func reset() -> void:

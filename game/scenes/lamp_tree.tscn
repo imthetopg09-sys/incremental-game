@@ -217,6 +217,7 @@ offset_left = 920.0
 offset_top = 424.0
 offset_right = 1240.0
 offset_bottom = 578.0
+grow_vertical = 0
 mouse_filter = 1
 theme_override_styles/panel = SubResource("StyleBoxFlat_panel")
 
@@ -225,7 +226,12 @@ layout_mode = 2
 mouse_filter = 2
 theme_override_constants/separation = 4
 
-[node name="Heading" type="Label" parent="TonightPanel/Box"]
+[node name="Head" type="HBoxContainer" parent="TonightPanel/Box"]
+layout_mode = 2
+mouse_filter = 2
+theme_override_constants/separation = 10
+
+[node name="Heading" type="Label" parent="TonightPanel/Box/Head"]
 layout_mode = 2
 theme_override_colors/font_color = Color(1, 0.86, 0.62, 1)
 theme_override_colors/font_outline_color = Color(0, 0, 0, 0.85)
@@ -233,14 +239,17 @@ theme_override_constants/outline_size = 6
 theme_override_font_sizes/font_size = 22
 text = "Tonight"
 
-[node name="Tonight" type="Label" parent="TonightPanel/Box"]
+[node name="Tonight" type="Label" parent="TonightPanel/Box/Head"]
 unique_name_in_owner = true
 layout_mode = 2
+size_flags_horizontal = 3
 theme_override_colors/font_color = Color(0.92, 0.86, 0.76, 0.9)
 theme_override_colors/font_outline_color = Color(0, 0, 0, 0.85)
 theme_override_constants/outline_size = 5
 theme_override_font_sizes/font_size = 16
 text = "You walk alone."
+horizontal_alignment = 2
+vertical_alignment = 2
 
 [node name="Stats" type="Label" parent="TonightPanel/Box"]
 unique_name_in_owner = true
@@ -248,6 +257,7 @@ layout_mode = 2
 theme_override_colors/font_color = Color(1, 0.78, 0.45, 0.8)
 theme_override_colors/font_outline_color = Color(0, 0, 0, 0.85)
 theme_override_constants/outline_size = 5
+theme_override_constants/line_spacing = -1
 theme_override_font_sizes/font_size = 15
 autowrap_mode = 3
 

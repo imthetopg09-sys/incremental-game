@@ -45,7 +45,7 @@ var _hovered: EchoRecording = null
 var _hover_card := ""
 ## Node id -> {"panel", "name", "pips", "cost"}.
 var _cards := {}
-## One per Sconce: {"panel", "rec" (null when empty), "extra"}.
+## One per Sconce: {"panel", "rec" (null when hollow), "extra", "locked"}.
 var _slots: Array[Dictionary] = []
 ## Node id or Echo -> seconds of highlight left after a buy or braid.
 var _pulse := {}
@@ -102,8 +102,9 @@ func _process(delta: float) -> void:
 func try_buy(id: String) -> bool:
 	var cost := Upgrades.next_cost(id, GameState.level(id))
 	if not GameState.buy(id):
-		_deny(_cards[id]["cost"] if _cards.has(id) else null)
+		_deny(_cards[id]["cost"] if _cards.has(id) else null, cost >= 0)
 		return false
+	GameState.save()
 	_pulse[id] = PULSE_TIME
 	_bump(_cards[id]["panel"] if _cards.has(id) else null)
 	_spent(cost)
@@ -124,9 +125,10 @@ func click_echo(rec: EchoRecording) -> bool:
 		var into := selected
 		var cost := GameState.braid_cost(into)
 		if not GameState.braid(into, rec):
-			_deny(braid_hint)
+			_deny(braid_hint, GameState.tallow < cost)
 			_refresh()
 			return false
+		GameState.save()
 		selected = null
 		_hovered = null
 		_build_slots()
@@ -151,6 +153,7 @@ func light_next_night() -> void:
 	if _leaving:
 		return
 	_leaving = true
+	GameState.save()
 	_radius = STRIKE_RADIUS
 	_sfx("strike")
 	await get_tree().create_timer(0.3).timeout
@@ -161,6 +164,7 @@ func go_to_title() -> void:
 	if _leaving:
 		return
 	_leaving = true
+	GameState.save()
 	get_tree().change_scene_to_file(TITLE_SCENE)
 
 
@@ -168,10 +172,10 @@ func _unhandled_input(event: InputEvent) -> void:
 	if _leaving:
 		return
 	if event.is_action_pressed("ui_accept"):
-		accept_event()
+		get_viewport().set_input_as_handled()
 		light_next_night()
 	elif event.is_action_pressed("ui_cancel"):
-		accept_event()
+		get_viewport().set_input_as_handled()
 		if selected != null:
 			deselect()
 		else:
@@ -205,10 +209,11 @@ func _bump(c: Control) -> void:
 	create_tween().tween_property(c, "scale", Vector2.ONE, PULSE_TIME).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 
 
-## Flashes a label red, for a click that could not be paid for.
-func _deny(label: Label) -> void:
+## Flashes a label red for a click that did nothing, and the Tallow count too when
+## Tallow was what was missing.
+func _deny(label: Label, short_of_tallow: bool) -> void:
 	_sfx("ui_click")
-	for l in [label, tallow_label]:
+	for l in [label, tallow_label if short_of_tallow else null]:
 		if l == null:
 			continue
 		l.self_modulate = DENIED * 1.4
@@ -369,7 +374,9 @@ func _build_slots() -> void:
 func _refresh() -> void:
 	tallow_label.text = "%d Tallow" % GameState.tallow
 	var info := "Run %d next" % GameState.run_number
-	if GameState.best_time > 0.0:
+	if GameState.best_time >= Tuning.NIGHT_LENGTH:
+		info += "      Best night reached dawn"
+	elif GameState.best_time > 0.0:
 		info += "      Best night reached %s" % NightClock.label(GameState.best_time)
 	info_label.text = info
 	_style_cards()
@@ -380,7 +387,7 @@ func _refresh() -> void:
 	if runs == 0:
 		tonight_label.text = "You walk alone."
 	else:
-		tonight_label.text = "%d %s beside you." % [runs, "run walks" if runs == 1 else "runs walk"]
+		tonight_label.text = "%d %s with you." % [runs, "run walks" if runs == 1 else "runs walk"]
 	stats_label.text = _stats_text(GameState.stats())
 	_refresh_braid()
 

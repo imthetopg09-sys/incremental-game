@@ -309,6 +309,7 @@ func _end_run(died: bool) -> void:
 		overlay_body.text = "Dawn is coming. %d shadows burned.   +%d Tallow" % [sim.burned, _tallow_earned]
 	await get_tree().create_timer(1.0).timeout
 	if GameState.try_keep(rec):
+		GameState.save()
 		overlay_body.text += "\nThis run will walk beside you as an Echo."
 		state = State.WAITING
 	else:
@@ -378,6 +379,7 @@ func _choose(chosen: EchoRecording, new_rec: EchoRecording) -> void:
 ## After a night: on to the Lamp Tree, where the next night is lit.
 func _next_run() -> void:
 	GameState.begin_next_run()
+	GameState.save()
 	get_tree().change_scene_to_file("res://scenes/lamp_tree.tscn")
 
 
@@ -407,6 +409,7 @@ func _unhandled_input(event: InputEvent) -> void:
 				_next_run()
 			elif event.is_action_pressed("ui_cancel"):
 				GameState.begin_next_run()
+				GameState.save()
 				get_tree().change_scene_to_file("res://scenes/main.tscn")
 
 
