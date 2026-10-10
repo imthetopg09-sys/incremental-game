@@ -89,7 +89,7 @@ func _init(echo_list: Array[EchoRecording] = [], seed_value: int = Tuning.NIGHT_
 	prev_player_pos = player_pos
 	recording.run_number = run_number
 	recording.record_until(0.0, player_pos)
-	pending_level_ups = stats["kindling"]
+	pending_level_ups = mini(stats["kindling"], _room_for_picks())
 	_refresh_casters()
 
 
@@ -148,7 +148,7 @@ func offer() -> Array[String]:
 
 
 func pick_boon(id: String) -> void:
-	if pending_level_ups <= 0 or Upgrades.boon(id).is_empty():
+	if pending_level_ups <= 0 or Upgrades.boon(id).is_empty() or boons.get(id, 0) >= Upgrades.BOON_MAX_LEVEL:
 		return
 	pending_level_ups -= 1
 	boons[id] = boons.get(id, 0) + 1
@@ -436,8 +436,18 @@ func _gain_embers(n: int) -> void:
 	while embers >= embers_for_next_level():
 		embers -= embers_for_next_level()
 		level += 1
-		pending_level_ups += 1
+		# Once every Boon is maxed a level-up has nothing left to offer.
+		if _room_for_picks() > 0:
+			pending_level_ups += 1
 		events.append({"type": "level_up", "level": level})
+
+
+## Boon levels still to be had this night, beyond the picks already waiting.
+func _room_for_picks() -> int:
+	var room := 0
+	for b in Upgrades.BOONS:
+		room += Upgrades.BOON_MAX_LEVEL - int(boons.get(b["id"], 0))
+	return room - pending_level_ups
 
 
 func _contact(dt: float) -> void:

@@ -169,7 +169,7 @@ func test_title_continue_and_start_over(t) -> void:
 	await t.process_frame
 	var hint: Label = main.get_node("Hint")
 	var start_over: Label = main.get_node("StartOver")
-	t.check(hint.text.begins_with("Click to continue: Run 4"), "hint reads %s" % hint.text)
+	t.check(hint.text.begins_with("Click to tend the Lamp Tree (Run 4 next)"), "hint reads %s" % hint.text)
 	t.check(start_over.visible and start_over.text == "Start over", "Start over is offered")
 	t.check(start_over.mouse_filter == Control.MOUSE_FILTER_STOP, "Start over catches its own clicks")
 

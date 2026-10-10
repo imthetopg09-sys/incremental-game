@@ -16,19 +16,27 @@ static func save(gs: Node, path := PATH) -> bool:
 		"version": VERSION,
 		"run_number": gs.run_number,
 		"echoes": gs.echoes.map(func(e): return e.to_dict()),
-		"let_go": let_go.map(func(e): return e.to_dict()),
+		# Let-go Echoes never walk again; their numbers are all that is kept.
+		"let_go": let_go.map(func(e): return {"run": e.run_number, "duration": e.duration, "died": e.died, "burned": e.burned}),
 		"let_go_count": gs.let_go_count,
 		"best_time": gs.best_time,
 		"tallow": gs.tallow,
 		"total_burned": gs.total_burned,
 		"tree_levels": gs.tree_levels.duplicate(),
+		"daylight": gs.daylight,
+		"dawns": gs.dawns,
+		"first_dawn_run": gs.first_dawn_run,
+		"first_dawn_seconds": gs.first_dawn_seconds,
+		"night_seconds": gs.night_seconds,
+		"last_seen": gs.last_seen,
 	}
 	var tmp := path + ".tmp"
 	var f := FileAccess.open(tmp, FileAccess.WRITE)
 	if f == null:
 		push_warning("SaveGame: cannot write %s (%s)" % [tmp, error_string(FileAccess.get_open_error())])
 		return false
-	var wrote := f.store_string(JSON.stringify(data))
+	# Full precision, so pick times and durations come back bit for bit.
+	var wrote := f.store_string(JSON.stringify(data, "", true, true))
 	f.close()
 	if not wrote:
 		DirAccess.remove_absolute(tmp)
@@ -60,6 +68,12 @@ static func load_into(gs: Node, path := PATH) -> bool:
 	gs.best_time = maxf(0.0, _float(d, "best_time", 0.0))
 	gs.tallow = maxi(0, _int(d, "tallow", 0))
 	gs.total_burned = maxi(0, _int(d, "total_burned", 0))
+	gs.daylight = maxi(0, _int(d, "daylight", 0))
+	gs.dawns = maxi(0, _int(d, "dawns", 0))
+	gs.first_dawn_run = maxi(0, _int(d, "first_dawn_run", 0))
+	gs.first_dawn_seconds = maxf(0.0, _float(d, "first_dawn_seconds", 0.0))
+	gs.night_seconds = maxf(0.0, _float(d, "night_seconds", 0.0))
+	gs.last_seen = maxf(0.0, _float(d, "last_seen", 0.0))
 	for e in _echoes(d.get("echoes")):
 		gs.echoes.append(e)
 	for e in _echoes(d.get("let_go")):
@@ -68,8 +82,8 @@ static func load_into(gs: Node, path := PATH) -> bool:
 	var levels = d.get("tree_levels")
 	if levels is Dictionary:
 		for id in levels:
-			if levels[id] is float or levels[id] is int:
-				gs.tree_levels[str(id)] = int(levels[id])
+			if (levels[id] is float or levels[id] is int) and not Upgrades.node(str(id)).is_empty():
+				gs.tree_levels[str(id)] = clampi(int(levels[id]), 0, Upgrades.max_level(str(id)))
 	return true
 
 

@@ -8,6 +8,7 @@ const LIGHT_FOLLOW := 12.0
 const LIGHT_COLOR := Color(1.0, 0.68, 0.32)
 const HINT_NEW := "Click to strike a match. Esc quits."
 const HINT_CONTINUE := "Click to continue: Run %d. Esc quits."
+const HINT_TREE := "Click to tend the Lamp Tree (Run %d next). Esc quits."
 const START_OVER := "Start over"
 const START_OVER_CONFIRM := "Click again to erase your save"
 ## How long the second click on "Start over" has to land.
@@ -21,6 +22,7 @@ const START_OVER_WARN := Color(1.0, 0.58, 0.42, 1.0)
 @onready var version_label: Label = $Version
 @onready var hint_label: Label = $Hint
 @onready var start_over: Label = $StartOver
+@onready var subtitle: Label = $Subtitle
 
 ## Where the save lives. Tests point this at a scratch file before the title enters the tree.
 var save_path := SaveGame.PATH
@@ -44,14 +46,80 @@ func _ready() -> void:
 	start_over.mouse_entered.connect(_set_hovering.bind(true))
 	start_over.mouse_exited.connect(_set_hovering.bind(false))
 	_refresh_save_ui()
+	_show_vigil()
 
 
 func _refresh_save_ui() -> void:
 	var has_save := SaveGame.exists(save_path)
-	hint_label.text = HINT_CONTINUE % GameState.run_number if has_save else HINT_NEW
+	if not has_save:
+		hint_label.text = HINT_NEW
+	elif _between_nights():
+		hint_label.text = HINT_TREE % GameState.run_number
+	else:
+		hint_label.text = HINT_CONTINUE % GameState.run_number
+	_progress_label().text = _progress_text() if has_save else ""
+	if GameState.daylight > 0:
+		subtitle.text = "It is midnight again. You have %d Daylight." % GameState.daylight
+	else:
+		subtitle.text = "It is midnight. It is always midnight."
 	start_over.visible = has_save
 	_confirm_left = 0.0
 	_style_start_over()
+
+
+## Once per launch: what the Echoes earned keeping watch while the game was closed.
+func _show_vigil() -> void:
+	if GameState.vigil_paid <= 0:
+		return
+	var away := int(GameState.vigil_away / 60.0)
+	var label := Label.new()
+	label.text = "While you were away, your Echoes kept watch for %s.   +%d Tallow" % [
+		"%d h %d m" % [floori(away / 60.0), away % 60] if away >= 60 else "%d m" % away, GameState.vigil_paid]
+	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	label.add_theme_font_size_override("font_size", 18)
+	label.add_theme_color_override("font_color", Color(1.0, 0.78, 0.45))
+	label.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.85))
+	label.add_theme_constant_override("outline_size", 6)
+	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	label.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
+	label.offset_top = -130.0
+	label.offset_bottom = -100.0
+	add_child(label)
+	GameState.vigil_paid = 0
+
+
+## A saved game past its first night resumes on the Lamp Tree, where Tallow is spent.
+func _between_nights() -> bool:
+	return GameState.run_number > 1
+
+
+func _progress_text() -> String:
+	var parts: Array[String] = ["Run %d next" % GameState.run_number, "%d Tallow" % GameState.tallow]
+	if GameState.best_time >= Tuning.NIGHT_LENGTH:
+		parts.append("best night reached dawn")
+	elif GameState.best_time > 0.0:
+		parts.append("best night %s" % NightClock.label(GameState.best_time))
+	if not GameState.echoes.is_empty():
+		parts.append("%d %s kept" % [GameState.echoes.size(), "Echo" if GameState.echoes.size() == 1 else "Echoes"])
+	return "   ".join(parts)
+
+
+func _progress_label() -> Label:
+	var label := get_node_or_null("Progress") as Label
+	if label == null:
+		label = Label.new()
+		label.name = "Progress"
+		label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		label.add_theme_font_size_override("font_size", 17)
+		label.add_theme_color_override("font_color", Color(0.85, 0.78, 0.68, 0.7))
+		label.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.85))
+		label.add_theme_constant_override("outline_size", 6)
+		label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		label.set_anchors_preset(Control.PRESET_TOP_WIDE)
+		label.offset_top = 246.0
+		label.offset_bottom = 272.0
+		add_child(label)
+	return label
 
 
 func _style_start_over() -> void:
@@ -115,7 +183,8 @@ func _gui_input(event: InputEvent) -> void:
 		_starting = true
 		_radius = STRIKE_RADIUS
 		await get_tree().create_timer(0.35).timeout
-		get_tree().change_scene_to_file("res://scenes/night.tscn")
+		var next := "res://scenes/lamp_tree.tscn" if SaveGame.exists(save_path) and _between_nights() else "res://scenes/night.tscn"
+		get_tree().change_scene_to_file(next)
 
 
 func _unhandled_input(event: InputEvent) -> void:

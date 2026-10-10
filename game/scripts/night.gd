@@ -6,7 +6,7 @@ extends Node2D
 ## Echoes, lantern), FX (foresight dots, burn rings), Dim and Develop (the end-of-run
 ## route), then the HUD.
 
-enum State { PLAYING, PAUSED, LEVEL_UP, DEVELOPING, CHOOSING, WAITING }
+enum State { PLAYING, PAUSED, LEVEL_UP, SUNRISE, DEVELOPING, CHOOSING, WAITING }
 
 const PLAYER_COLOR := Color(1.0, 0.72, 0.36)
 const SHADOW_BODY := Color(0, 0, 0)
@@ -27,6 +27,13 @@ const HOUR_LINES := {
 	4: "4 AM. Hold on.",
 	5: "5 AM. Almost dawn.",
 }
+## Sunrise: the sky pales, then the sun line sweeps west across the square and
+## burns away every shadow and every Echo, then holds a moment on the daylight.
+const SUNRISE_PALE := 1.5
+const SUNRISE_SWEEP := 4.5
+const SUNRISE_HOLD := 1.2
+const SUN_COLOR := Color(1.0, 0.82, 0.52)
+const TOAST_LIFE := 3.0
 const STEER_KEYS: Array[Key] = [KEY_W, KEY_A, KEY_S, KEY_D, KEY_UP, KEY_DOWN, KEY_LEFT, KEY_RIGHT]
 
 @onready var background: ColorRect = $Background
@@ -46,6 +53,7 @@ const STEER_KEYS: Array[Key] = [KEY_W, KEY_A, KEY_S, KEY_D, KEY_UP, KEY_DOWN, KE
 @onready var overlay_body: Label = %OverlayBody
 @onready var overlay_hint: Label = %OverlayHint
 @onready var choices: VBoxContainer = %Choices
+@onready var reward_label: Label = %Reward
 
 var sim: NightSim
 var state := State.PLAYING
@@ -55,10 +63,28 @@ var _overlay_time := 0.0
 var _paused_at := 0.0
 var _highlight: EchoRecording = null
 var _render_time := 0.0
+## When the window last regained focus; the click that refocuses it must not resume.
+var _focus_in_at := -1.0
 var _mouse_steer := true
 var _sparks: Array[Dictionary] = []  # {points, age, color}
 var _level_panel: PanelContainer = null
 var _tallow_earned := 0
+## Sunrise state: seconds since 6 AM, the sun line's x in pixels, the Echoes the
+## sun has taken, each Echo's whole route, and drifting sparks.
+var _sunrise_time := 0.0
+var _sun_x := INF
+var _gone := {}
+var _routes := {}
+var _motes: Array[Dictionary] = []  # {pos, vel, age, life, color}
+var _dawn := false
+var _first_dawn := false
+var _choices_at := 0.0
+var _reward_suffix := ""
+var _leaving := false
+## Lines queued to show one after another in the toast (the first nights' tutorial).
+var _toast_queue: Array[String] = []
+var _pause_label: Label = null
+var _levels_total := 0
 ## Dev flags (pass after `--` on the command line): --autopilot, --demo-echoes=N,
 ## --skip-to=SECONDS. Used for screenshots and footage.
 var _autopilot: Bot = null
@@ -66,6 +92,9 @@ var _autopilot: Bot = null
 
 func _ready() -> void:
 	var args := OS.get_cmdline_user_args()
+	# Dev flags are for footage: they must never touch the player's real save.
+	if Array(args).any(func(a): return a == "--autopilot" or a.begins_with("--demo-") or a.begins_with("--skip-to=")):
+		GameState.autosave = false
 	if args.has("--autopilot"):
 		_autopilot = Bot.new("kite")
 	for a in args:
@@ -81,7 +110,7 @@ func _ready() -> void:
 					sim.pick_boon(bot.pick_boon(sim))
 				sim.step(1.0 / 60.0, bot.steer(sim))
 			if sim.is_over():
-				_end_run.call_deferred(not sim.alive)
+				_night_over.call_deferred(not sim.alive)
 	trails.draw.connect(_draw_trails)
 	entities.draw.connect(_draw_entities)
 	fx_layer.draw.connect(_draw_fx)
@@ -90,7 +119,17 @@ func _ready() -> void:
 	overlay.visible = false
 	toast_label.modulate.a = 0.0
 	Input.mouse_mode = Input.MOUSE_MODE_HIDDEN
-	_show_toast("Run %d. It is midnight." % GameState.run_number if GameState.run_number > 1 else "It is midnight. It is always midnight.")
+	if sim.t > 0.0:
+		pass  # Fast-forwarded footage: no midnight lines.
+	elif GameState.run_number == 1:
+		_toast_queue = ["It is midnight. It is always midnight.", "Steer the lantern with the mouse, or WASD.",
+			"Your light burns the shadows. Don't let them touch you.", "Hold the night until 6:00 AM."]
+	elif sim.echoes.size() == 1 and GameState.let_go_count == 0 and GameState.dawns == 0:
+		_toast_queue = ["Run %d. Your last run walks beside you as an Echo." % GameState.run_number,
+			"Its light burns far hotter than yours. Lead the shadows into it."]
+	else:
+		_toast_queue = ["Run %d. It is midnight." % GameState.run_number]
+	_toast_time = 99.0
 	_update_hud()
 	Sfx.strike()
 	if state == State.PLAYING:
@@ -105,6 +144,8 @@ func _notification(what: int) -> void:
 	if what == NOTIFICATION_APPLICATION_FOCUS_OUT or what == NOTIFICATION_WM_WINDOW_FOCUS_OUT:
 		if state == State.PLAYING and _autopilot == null:
 			_set_paused(true)
+	elif what == NOTIFICATION_APPLICATION_FOCUS_IN or what == NOTIFICATION_WM_WINDOW_FOCUS_IN:
+		_focus_in_at = _render_time
 
 
 func _physics_process(delta: float) -> void:
@@ -124,26 +165,37 @@ func _process(delta: float) -> void:
 	for sp in _sparks:
 		sp["age"] += delta
 	_sparks = _sparks.filter(func(sp): return sp["age"] < 0.25)
+	for m in _motes:
+		m["age"] += delta
+		m["vel"] = m["vel"] * (1.0 - 1.5 * delta) + Vector2(0, -40.0 * delta)
+		m["pos"] += m["vel"] * delta
+	_motes = _motes.filter(func(m): return m["age"] < m["life"])
+	if state == State.SUNRISE:
+		_advance_sunrise(delta)
 	_toast_time += delta
-	if state == State.PAUSED:
-		toast_label.modulate.a = 1.0
+	if _toast_time > TOAST_LIFE + 0.2 and not _toast_queue.is_empty() and state == State.PLAYING:
+		_show_toast(_toast_queue.pop_front())
+	if state == State.PAUSED or state == State.LEVEL_UP:
+		toast_label.modulate.a = 0.0
 	else:
-		toast_label.modulate.a = clampf(2.5 - _toast_time, 0.0, 1.0) * clampf(_toast_time * 3.0, 0.0, 1.0)
+		toast_label.modulate.a = clampf(TOAST_LIFE - _toast_time, 0.0, 1.0) * clampf(_toast_time * 3.0, 0.0, 1.0)
 	if overlay.visible:
 		_overlay_time += delta
 		var a := clampf(_overlay_time * 2.0, 0.0, 1.0)
 		overlay.modulate.a = a
-		dim.color.a = 0.6 * a
+		dim.color.a = (0.3 if _dawn else 0.6) * a
 		develop.modulate.a = clampf(_overlay_time, 0.0, 1.0)
+		# The Tallow counts up as the panel fades in.
+		reward_label.text = "+%d Tallow%s" % [roundi(_tallow_earned * clampf(_overlay_time / 0.9, 0.0, 1.0)), _reward_suffix]
 		overlay_hint.visible = state == State.WAITING and _overlay_time > 1.0
 		for c in hud_top:
 			c.modulate.a = 1.0 - a
 	else:
-		_fade_hud_near_lantern()
+		_fade_hud_near_lantern(delta)
 	_update_lights()
 	_update_hud()
 	# The end screen is static: only redraw the world while the night is live.
-	if not overlay.visible:
+	if not overlay.visible or not _motes.is_empty():
 		trails.queue_redraw()
 		entities.queue_redraw()
 		fx_layer.queue_redraw()
@@ -185,11 +237,18 @@ func _on_event(e: Dictionary) -> void:
 		"hour":
 			_show_toast(HOUR_LINES.get(e["hour"], ""))
 		"death":
-			Sfx.death()
-			_end_run(true)
+			_night_over(true)
 		"dawn":
-			Sfx.dawn()
-			_end_run(false)
+			_night_over(false)
+
+
+func _night_over(died: bool) -> void:
+	if died:
+		Sfx.death()
+		_end_run(true)
+	else:
+		Sfx.dawn()
+		_begin_sunrise()
 
 
 func _show_toast(text: String) -> void:
@@ -202,11 +261,30 @@ func _set_paused(on: bool) -> void:
 		state = State.PAUSED
 		_paused_at = _render_time
 		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
-		_show_toast("Paused. Click or press Esc to resume. Q quits.")
+		dim.color.a = 0.45
+		_pause_screen().visible = true
 	elif not on and state == State.PAUSED:
 		state = State.PLAYING
 		Input.mouse_mode = Input.MOUSE_MODE_HIDDEN
-		_toast_time = 2.5
+		dim.color.a = 0.0
+		_pause_screen().visible = false
+
+
+func _pause_screen() -> Label:
+	if _pause_label == null:
+		_pause_label = Label.new()
+		_pause_label.text = "Paused\n\nSteer the lantern with the mouse, or WASD.\nYour light burns shadows; their touch drains your flame.\nHold the night until 6:00 AM.\n\nClick or Esc to resume.   Q quits."
+		_pause_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		_pause_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		_pause_label.add_theme_font_size_override("font_size", 20)
+		_pause_label.add_theme_color_override("font_color", Color(0.92, 0.86, 0.76))
+		_pause_label.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.9))
+		_pause_label.add_theme_constant_override("outline_size", 6)
+		_pause_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_pause_label.set_anchors_preset(Control.PRESET_FULL_RECT)
+		_pause_label.visible = false
+		$HUD.add_child(_pause_label)
+	return _pause_label
 
 
 # --- Level-ups ------------------------------------------------------------------
@@ -221,6 +299,7 @@ func _check_level_up() -> void:
 		return
 	state = State.LEVEL_UP
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	_levels_total = sim.pending_level_ups
 	_show_level_choices()
 
 
@@ -234,6 +313,8 @@ func _show_level_choices() -> void:
 	_level_panel.add_child(box)
 	var title := Label.new()
 	title.text = "The flame grows. Choose a Boon." if sim.t > 0.0 else "Kindling. Choose a Boon."
+	if _levels_total > 1:
+		title.text = title.text.trim_suffix(".") + "  (%d of %d)" % [_levels_total - sim.pending_level_ups + 1, _levels_total]
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	title.add_theme_font_size_override("font_size", 26)
 	title.add_theme_color_override("font_color", Color(1, 0.86, 0.62))
@@ -253,13 +334,19 @@ func _show_level_choices() -> void:
 		var info := Upgrades.boon(id)
 		var lv: int = sim.boons.get(id, 0)
 		var b := Button.new()
-		b.custom_minimum_size = Vector2(250, 150)
-		b.text = "%s\n\n%s\n\n%s   [%d]" % [info["name"], info["desc"],
-			"New" if lv == 0 else "Level %d" % (lv + 1), i + 1]
-		b.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		b.add_theme_font_size_override("font_size", 18)
-		b.add_theme_color_override("font_color", Color(1, 0.9, 0.75))
-		b.add_theme_color_override("font_hover_color", Color(1, 0.97, 0.9))
+		b.custom_minimum_size = Vector2(260, 172)
+		var col := VBoxContainer.new()
+		col.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		col.add_theme_constant_override("separation", 4)
+		col.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT, Control.PRESET_MODE_MINSIZE, 14)
+		col.add_child(_boon_label(info["name"], 23, Color(1, 0.8, 0.45)))
+		col.add_child(_boon_label("New" if lv == 0 else "Level %d" % (lv + 1), 14, Color(1, 0.86, 0.62, 0.6)))
+		var desc := _boon_label(info["desc"], 16, Color(0.94, 0.88, 0.8))
+		desc.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		desc.size_flags_vertical = Control.SIZE_EXPAND_FILL
+		col.add_child(desc)
+		col.add_child(_boon_label("Press %d" % (i + 1), 13, Color(0.85, 0.78, 0.68, 0.5)))
+		b.add_child(col)
 		b.add_theme_stylebox_override("normal", _choice_box(PLAYER_COLOR, 0.25))
 		b.add_theme_stylebox_override("hover", _choice_box(PLAYER_COLOR, 0.8))
 		b.add_theme_stylebox_override("focus", _choice_box(PLAYER_COLOR, 0.8))
@@ -268,8 +355,18 @@ func _show_level_choices() -> void:
 		row.add_child(b)
 	$HUD.add_child(_level_panel)
 	_level_panel.reset_size()
-	_level_panel.position = (Tuning.ARENA_SIZE - _level_panel.size) * 0.5
+	# The bottom of the screen, so the lantern (which starts in the middle) stays in view.
+	_level_panel.position = Vector2((Tuning.ARENA_SIZE.x - _level_panel.size.x) * 0.5, Tuning.ARENA_SIZE.y - _level_panel.size.y - 28.0)
 	_level_panel.set_meta("offer", offer)
+
+
+func _boon_label(text: String, font_size: int, color: Color) -> Label:
+	var l := Label.new()
+	l.text = text
+	l.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	l.add_theme_font_size_override("font_size", font_size)
+	l.add_theme_color_override("font_color", color)
+	return l
 
 
 func _pick(id: String) -> void:
@@ -286,6 +383,106 @@ func _pick(id: String) -> void:
 	Input.mouse_mode = Input.MOUSE_MODE_HIDDEN
 
 
+# --- Sunrise --------------------------------------------------------------------
+
+func _begin_sunrise() -> void:
+	state = State.SUNRISE
+	_dawn = true
+	_sunrise_time = 0.0
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	_show_toast("6 AM. Here comes the sun.")
+	for rec in sim.echoes:
+		_routes[rec] = _thin(rec.path_between(0.0, rec.duration), 3)
+	_routes[sim.recording] = _thin(sim.recording.path_between(0.0, sim.recording.duration), 3)
+
+
+func _thin(path: PackedVector2Array, step: int) -> PackedVector2Array:
+	var out := PackedVector2Array()
+	for k in range(0, path.size(), step):
+		out.append(path[k])
+	if not path.is_empty():
+		out.append(path[path.size() - 1])
+	return out
+
+
+## The sun line moves from past the east edge to past the west edge. Shadows and
+## Echoes burn as it reaches them; the lantern's own route is the one it leaves.
+func _advance_sunrise(delta: float) -> void:
+	_sunrise_time += delta
+	var pale := clampf(_sunrise_time / SUNRISE_PALE, 0.0, 1.0)
+	var k := clampf((_sunrise_time - SUNRISE_PALE) / SUNRISE_SWEEP, 0.0, 1.0)
+	var front := lerpf(1.15, -0.15, smoothstep(0.0, 1.0, k))
+	_sun_x = front * background.size.x
+	var mat := background.material as ShaderMaterial
+	mat.set_shader_parameter("dawn", pale)
+	mat.set_shader_parameter("sun_front", front)
+	var left: Array[NightSim.Shadow] = []
+	for sh in sim.shadows:
+		sh.prev_pos = sh.pos
+		if sh.pos.x > _sun_x:
+			_fx.append({"pos": sh.pos, "age": 0.0, "color": SUN_COLOR, "big": sh.kind == "bloat"})
+			_add_motes(sh.pos, Color(1.0, 0.6, 0.3), 3 if sh.kind == "mite" else 6)
+			Sfx.burn(-1, sh.kind == "bloat")
+		else:
+			# Everything still in the dark backs away from the light.
+			sh.pos.x -= sh.speed * 0.5 * delta
+			sh.facing = Vector2.LEFT
+			left.append(sh)
+	sim.shadows = left
+	for rec in sim.echoes:
+		if _gone.has(rec):
+			continue
+		var end := rec.position_at(rec.duration)
+		if end.x > _sun_x:
+			_gone[rec] = true
+			_fx.append({"pos": end, "age": 0.0, "color": rec.hue(), "big": true})
+			_add_motes(end, rec.hue(), 22)
+			Sfx.burn(rec.hue_index, true)
+	if _sunrise_time >= SUNRISE_PALE + SUNRISE_SWEEP + SUNRISE_HOLD:
+		_end_run(false)
+
+
+func _add_motes(at: Vector2, color: Color, count: int) -> void:
+	for i in count:
+		var ang := randf() * TAU
+		_motes.append({
+			"pos": at + Vector2.from_angle(ang) * randf() * 8.0,
+			"vel": Vector2.from_angle(ang) * randf_range(20.0, 90.0) + Vector2(0, -30.0),
+			"age": 0.0,
+			"life": randf_range(0.8, 1.8),
+			"color": color,
+		})
+
+
+## How strongly the sun lights a point: 0 in the dark, 1 once the line has passed.
+func _sunlight_at(p: Vector2) -> float:
+	if not _dawn:
+		return 0.0
+	return clampf((p.x - _sun_x) / 60.0 + 0.5, 0.0, 1.0)
+
+
+## During sunrise every route glows like a long exposure until the sun erases it.
+func _draw_sunrise_routes() -> void:
+	var glow := clampf(_sunrise_time / SUNRISE_PALE, 0.0, 1.0)
+	for rec in sim.echoes:
+		var path: PackedVector2Array = _routes.get(rec, PackedVector2Array())
+		if path.size() < 2:
+			continue
+		var c := rec.hue()
+		var cols := PackedColorArray()
+		cols.resize(path.size())
+		for k in path.size():
+			cols[k] = Color(c, 0.2 * glow * (1.0 - _sunlight_at(path[k])))
+		trails.draw_polyline_colors(path, cols, 2.0, true)
+		if not _gone.has(rec):
+			var end := rec.position_at(rec.duration)
+			trails.draw_circle(end, 11.0, Color(c, 0.2 * glow))
+			trails.draw_circle(end, 6.0, Color(c, 0.55 * glow))
+	var mine: PackedVector2Array = _routes.get(sim.recording, PackedVector2Array())
+	if mine.size() >= 2:
+		trails.draw_polyline(mine, Color(PLAYER_COLOR, 0.16 * glow), 2.0, true)
+
+
 # --- End of a run ---------------------------------------------------------------
 
 func _end_run(died: bool) -> void:
@@ -300,32 +497,61 @@ func _end_run(died: bool) -> void:
 	entities.queue_redraw()
 	fx_layer.queue_redraw()
 	develop.queue_redraw()
-	_tallow_earned = GameState.award(sim.burned_by_kind)
-	if died:
-		overlay_title.text = "Midnight, again."
-		overlay_body.text = "You held the night until %s.   %d shadows burned.   +%d Tallow" % [NightClock.label(rec.duration), sim.burned, _tallow_earned]
-	else:
-		overlay_title.text = "6:00 AM. You held the night."
-		overlay_body.text = "Dawn is coming. %d shadows burned.   +%d Tallow" % [sim.burned, _tallow_earned]
+	_toast_time = 99.0
+	# From here the save is always "between nights": the Tallow is banked and the
+	# run number has moved on, whenever the game is closed.
+	_tallow_earned = GameState.award(sim.burned_by_kind, rec.duration)
+	GameState.begin_next_run()
+	_reward_suffix = ""
+	if not died:
+		_greet_dawn(rec)
+		return
+	var kept := GameState.try_keep(rec)
+	GameState.save()
+	overlay_title.text = "Midnight, again."
+	overlay_body.text = "You held the night until %s.   %d shadows burned." % [NightClock.label(rec.duration), sim.burned]
 	await get_tree().create_timer(1.0).timeout
-	if GameState.try_keep(rec):
-		GameState.save()
+	if kept:
 		overlay_body.text += "\nThis run will walk beside you as an Echo."
 		state = State.WAITING
 	else:
 		_show_choices(rec)
 
 
+## Dawn: a Daylight, and the sun has taken every Echo. The first Dawn leads to the
+## Day Town; later ones go straight back to the Lamp Tree.
+func _greet_dawn(rec: EchoRecording) -> void:
+	_first_dawn = GameState.greet_dawn(rec)
+	GameState.save()
+	overlay_title.text = "First Dawn." if _first_dawn else "Dawn."
+	overlay_title.add_theme_color_override("font_color", Color(1.0, 0.9, 0.55))
+	_reward_suffix = "   +1 Daylight"
+	overlay_body.text = "You held the night until 6:00 AM.   %d shadows burned." % sim.burned
+	overlay_body.text += "\nThe sun took every Echo. The Lamp Tree remembers."
+	if _first_dawn:
+		overlay_hint.text = "Click to walk into the Day Town.   Esc for the title screen.   P saves a postcard."
+	await get_tree().create_timer(1.0).timeout
+	state = State.WAITING
+
+
 func _show_choices(new_rec: EchoRecording) -> void:
 	state = State.CHOOSING
 	overlay_body.text += "\nYour Sconces are full. Which light do you let go?"
+	_choices_at = _overlay_time
 	var candidates: Array[EchoRecording] = GameState.echoes.duplicate()
 	candidates.append(new_rec)
 	for rec in candidates:
 		var b := Button.new()
 		var is_new := rec == new_rec
 		var reach := NightClock.label(rec.duration) if rec.died else "dawn"
-		b.text = "Run %d   held until %s   %d burned%s" % [rec.run_number, reach, rec.burned, "  (this run)" if is_new else ""]
+		var who := "Run %d" % rec.run_number
+		if rec.members().size() > 1:
+			# Letting a Chorus go lets every braided run go with it.
+			who = "Runs %s (Chorus)" % "+".join(rec.members().map(func(m): return str(m.run_number)))
+		var burned := 0
+		for m in rec.members():
+			burned += m.burned
+		b.text = "%s   held until %s   %d burned%s" % [who, reach, burned, "  (this run)" if is_new else ""]
 		var hue := PLAYER_COLOR if is_new else rec.hue()
 		b.add_theme_color_override("font_color", hue)
 		b.add_theme_color_override("font_hover_color", hue.lightened(0.25))
@@ -372,15 +598,20 @@ func _choice_box(hue: Color, border_alpha: float, bg_alpha := 0.06) -> StyleBoxF
 
 
 func _choose(chosen: EchoRecording, new_rec: EchoRecording) -> void:
+	# The buttons appear under the cursor: ignore a click that was already on its way.
+	if state != State.CHOOSING or _overlay_time - _choices_at < 0.4:
+		return
 	GameState.let_go_of(chosen, new_rec)
 	_next_run()
 
 
 ## After a night: on to the Lamp Tree, where the next night is lit.
 func _next_run() -> void:
-	GameState.begin_next_run()
+	if _leaving:
+		return
+	_leaving = true
 	GameState.save()
-	get_tree().change_scene_to_file("res://scenes/lamp_tree.tscn")
+	get_tree().change_scene_to_file("res://scenes/day_town.tscn" if _first_dawn else "res://scenes/lamp_tree.tscn")
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -394,12 +625,12 @@ func _unhandled_input(event: InputEvent) -> void:
 				_set_paused(true)
 		State.PAUSED:
 			# Ignore the click that refocuses the window right after an auto-pause.
-			if event.is_action_pressed("ui_cancel") or (click and _render_time - _paused_at > 0.3):
+			if event.is_action_pressed("ui_cancel") or (click and _render_time - maxf(_paused_at, _focus_in_at) > 0.3):
 				_set_paused(false)
 			elif event is InputEventKey and event.pressed and event.keycode == KEY_Q:
 				get_tree().quit()
 		State.LEVEL_UP:
-			if event is InputEventKey and event.pressed and _level_panel != null:
+			if event is InputEventKey and event.pressed and not event.echo and _level_panel != null:
 				var idx: int = event.keycode - KEY_1
 				var offer: Array = _level_panel.get_meta("offer", [])
 				if idx >= 0 and idx < offer.size():
@@ -407,8 +638,8 @@ func _unhandled_input(event: InputEvent) -> void:
 		State.WAITING:
 			if _overlay_time > 1.0 and (click or event.is_action_pressed("ui_accept")):
 				_next_run()
-			elif event.is_action_pressed("ui_cancel"):
-				GameState.begin_next_run()
+			elif event.is_action_pressed("ui_cancel") and not _leaving:
+				_leaving = true
 				GameState.save()
 				get_tree().change_scene_to_file("res://scenes/main.tscn")
 
@@ -437,7 +668,8 @@ func _update_lights() -> void:
 	var colors := PackedVector4Array()
 	var flicker := 0.97 + 0.02 * sin(_render_time * 13.0) + 0.01 * sin(_render_time * 31.0 + 1.7)
 	var p := _player_draw_pos()
-	lights.append(Vector4(p.x, p.y, sim.light_radius() * flicker, 1.0 if sim.alive else 0.25))
+	var outshone := 1.0 - 0.7 * _sunlight_at(p)
+	lights.append(Vector4(p.x, p.y, sim.light_radius() * flicker, (1.0 if sim.alive else 0.25) * outshone))
 	colors.append(Vector4(PLAYER_COLOR.r, PLAYER_COLOR.g, PLAYER_COLOR.b, 1.0))
 	if _live():
 		var t := _draw_time()
@@ -474,6 +706,9 @@ func _update_lights() -> void:
 ## Long exposure: each Echo's recent route fades out over ROUTE_FADE seconds, and
 ## a spent Echo's whole route fades away shortly after it goes out.
 func _draw_trails() -> void:
+	if state == State.SUNRISE:
+		_draw_sunrise_routes()
+		return
 	if not _live():
 		return
 	var t := _draw_time()
@@ -559,6 +794,10 @@ func _draw_fx() -> void:
 		fx_layer.draw_polyline(jag, Color(sp["color"], 0.5 * a), 4.0, true)
 		fx_layer.draw_polyline(jag, Color(1, 1, 1, 0.9 * a), 1.5, true)
 
+	for m in _motes:
+		var mk: float = m["age"] / m["life"]
+		fx_layer.draw_circle(m["pos"], 2.4 * (1.0 - mk) + 0.6, Color(m["color"], 0.8 * (1.0 - mk)))
+
 	for fx in _fx:
 		var k: float = fx["age"] / FX_LIFE
 		var r: float = lerpf(6.0, 34.0 if fx["big"] else 22.0, k)
@@ -636,14 +875,19 @@ func _draw_develop() -> void:
 	if not overlay.visible:
 		return
 	for rec in sim.echoes:
+		if _dawn:
+			break
 		var path := rec.path_between(0.0, rec.duration)
 		if path.size() >= 2:
-			var hl := rec == _highlight
+			var hl := _highlight != null and _highlight.members().has(rec)
 			develop.draw_polyline(path, Color(rec.hue(), 0.55 if hl else 0.1), 3.0 if hl else 1.5, hl)
 	var whole := sim.recording.path_between(0.0, sim.recording.duration)
-	var a := 0.85 if _highlight == null or _highlight == sim.recording else 0.25
+	var a := 0.6 if _highlight == null or _highlight == sim.recording else 0.2
+	if _dawn:
+		# A whole night's route is long; in daylight it only needs to be a trace.
+		a = 0.3
 	if whole.size() >= 2:
-		develop.draw_polyline(whole, Color(PLAYER_COLOR, a), 2.5, true)
+		develop.draw_polyline(whole, Color(PLAYER_COLOR, a), 2.0 if _dawn else 2.5, true)
 
 
 func _draw_flame_bar() -> void:
@@ -657,14 +901,20 @@ func _draw_flame_bar() -> void:
 	var e := clampf(float(sim.embers) / sim.embers_for_next_level(), 0.0, 1.0)
 	flame_bar.draw_rect(Rect2(Vector2(0, size.y + 3.0), Vector2(size.x, 2.0)), Color(1, 1, 1, 0.12))
 	flame_bar.draw_rect(Rect2(Vector2(0, size.y + 3.0), Vector2(size.x * e, 2.0)), Color(1.0, 0.86, 0.55, 0.9))
+	var font := ThemeDB.fallback_font
+	var caption := Color(0.85, 0.78, 0.68, 0.6)
+	flame_bar.draw_string_outline(font, Vector2(size.x + 8.0, 6.0), "flame", HORIZONTAL_ALIGNMENT_LEFT, -1, 12, 4, Color(0, 0, 0, 0.7))
+	flame_bar.draw_string(font, Vector2(size.x + 8.0, 6.0), "flame", HORIZONTAL_ALIGNMENT_LEFT, -1, 12, caption)
+	flame_bar.draw_string_outline(font, Vector2(size.x + 8.0, 18.0), "embers", HORIZONTAL_ALIGNMENT_LEFT, -1, 12, 4, Color(0, 0, 0, 0.7))
+	flame_bar.draw_string(font, Vector2(size.x + 8.0, 18.0), "embers", HORIZONTAL_ALIGNMENT_LEFT, -1, 12, Color(1.0, 0.86, 0.55, 0.6))
 
 
 ## HUD labels fade when the lantern passes under them, so neither hides the other.
-func _fade_hud_near_lantern() -> void:
+func _fade_hud_near_lantern(delta: float) -> void:
 	var p := _player_draw_pos()
 	for c in hud_top:
 		var near := c.get_global_rect().grow(40.0).has_point(p)
-		c.modulate.a = move_toward(c.modulate.a, 0.35 if near else 1.0, 0.08)
+		c.modulate.a = move_toward(c.modulate.a, 0.35 if near else 1.0, delta * 5.0)
 
 
 func _update_hud() -> void:

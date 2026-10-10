@@ -27,6 +27,7 @@ const STRIKE_RADIUS := 420.0
 const LIGHT_FOLLOW := 10.0
 const NIGHT_SCENE := "res://scenes/night.tscn"
 const TITLE_SCENE := "res://scenes/main.tscn"
+const DAY_TOWN_SCENE := "res://scenes/day_town.tscn"
 
 @onready var night: ColorRect = $Night
 @onready var tallow_label: Label = %Tallow
@@ -52,11 +53,16 @@ var _pulse := {}
 var _light_pos := Vector2.ZERO
 var _radius := LIGHT_RADIUS
 var _leaving := false
+## Clicks and keys are ignored this long after the screen opens, so the rest of a
+## double click on the end screen cannot buy a node or skip the tree.
+var input_delay := 0.35
+var _opened_at := 0.0
 
 
 func _ready() -> void:
 	var args := OS.get_cmdline_user_args()
 	if args.has("--demo-tree") or args.has("--demo-chorus"):
+		GameState.autosave = false
 		GameState.make_demo_echoes(3)
 		GameState.tallow = 400
 		for e in GameState.echoes:
@@ -66,13 +72,18 @@ func _ready() -> void:
 			for id in ["thick_wick", "thick_wick", "foresight", "wide_glow"]:
 				GameState.buy(id)
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
-	light_button.pressed.connect(light_next_night)
+	_opened_at = Time.get_ticks_msec() / 1000.0
+	light_button.pressed.connect(func():
+		if _settled():
+			light_next_night())
 	_light_pos = Vector2(size.x * 0.5, 60.0)
 	var mat := night.material as ShaderMaterial
 	mat.set_shader_parameter("light_count", 1)
 	mat.set_shader_parameter("light_colors", PackedVector4Array([Vector4(PLAYER_COLOR.r, PLAYER_COLOR.g, PLAYER_COLOR.b, 1.0)]))
 	_build_cards()
 	_build_slots()
+	if GameState.daylight > 0:
+		_build_day_town_link()
 	_refresh()
 
 
@@ -109,6 +120,8 @@ func try_buy(id: String) -> bool:
 	_bump(_cards[id]["panel"] if _cards.has(id) else null)
 	_spent(cost)
 	_sfx("level_up")
+	if id == "extra_sconce":
+		_build_slots()
 	_refresh()
 	return true
 
@@ -123,7 +136,7 @@ func click_echo(rec: EchoRecording) -> bool:
 		selected = null
 	else:
 		var into := selected
-		var cost := GameState.braid_cost(into)
+		var cost := GameState.braid_cost(into, rec)
 		if not GameState.braid(into, rec):
 			_deny(braid_hint, GameState.tallow < cost)
 			_refresh()
@@ -171,7 +184,7 @@ func go_to_title() -> void:
 func _unhandled_input(event: InputEvent) -> void:
 	if _leaving:
 		return
-	if event.is_action_pressed("ui_accept"):
+	if event.is_action_pressed("ui_accept") and _settled():
 		get_viewport().set_input_as_handled()
 		light_next_night()
 	elif event.is_action_pressed("ui_cancel"):
@@ -189,7 +202,11 @@ func _gui_input(event: InputEvent) -> void:
 
 
 func _is_click(event: InputEvent) -> bool:
-	return event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT
+	return event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT and _settled()
+
+
+func _settled() -> bool:
+	return Time.get_ticks_msec() / 1000.0 - _opened_at >= input_delay
 
 
 func _sfx(sound: String) -> void:
@@ -333,13 +350,13 @@ func _build_slots() -> void:
 		if rec == null:
 			panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
 			var locked: bool = slot["locked"]
-			var empty := _label("Locked" if locked else "Empty Sconce", 15, Color(MUTED, 0.3 if locked else 0.5))
+			var empty := _label("Locked" if locked else "Empty Sconce", 15, Color(MUTED, 0.55 if locked else 0.6))
 			empty.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 			empty.size_flags_vertical = Control.SIZE_EXPAND_FILL
 			empty.vertical_alignment = VERTICAL_ALIGNMENT_BOTTOM if locked else VERTICAL_ALIGNMENT_CENTER
 			box.add_child(empty)
 			if locked:
-				var how := _label("Grow Extra Sconce", 13, Color(MUTED, 0.3))
+				var how := _label("Grow Extra Sconce", 13, Color(MUTED, 0.55))
 				how.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 				how.size_flags_vertical = Control.SIZE_EXPAND_FILL
 				box.add_child(how)
@@ -369,6 +386,32 @@ func _build_slots() -> void:
 		_slots.append(slot)
 
 
+## After the first Dawn, a way back to the Day Town under the Tallow count.
+func _build_day_town_link() -> void:
+	var b := Button.new()
+	b.flat = true
+	b.text = "Visit the Day Town"
+	b.focus_mode = Control.FOCUS_NONE
+	b.add_theme_font_size_override("font_size", 16)
+	b.add_theme_color_override("font_color", MUTED)
+	b.add_theme_color_override("font_hover_color", PLAYER_COLOR)
+	b.add_theme_color_override("font_pressed_color", PLAYER_COLOR)
+	b.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+	b.offset_left = -240.0
+	b.offset_right = -36.0
+	b.offset_top = 74.0
+	b.offset_bottom = 102.0
+	b.alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	b.pressed.connect(func():
+		if _leaving:
+			return
+		_leaving = true
+		_sfx("ui_click")
+		GameState.save()
+		get_tree().change_scene_to_file(DAY_TOWN_SCENE))
+	add_child(b)
+
+
 # --- Refreshing -----------------------------------------------------------------
 
 func _refresh() -> void:
@@ -378,6 +421,8 @@ func _refresh() -> void:
 		info += "      Best night reached dawn"
 	elif GameState.best_time > 0.0:
 		info += "      Best night reached %s" % NightClock.label(GameState.best_time)
+	if GameState.daylight > 0:
+		info += "      %d Daylight" % GameState.daylight
 	info_label.text = info
 	_style_cards()
 	sconce_count.text = "%d of %d filled" % [GameState.echoes.size(), GameState.sconces]
@@ -425,6 +470,8 @@ func _refresh_braid() -> void:
 ## The hint line under "Sconces" and its color, for the current pick and hover.
 func _braid_hint() -> Array:
 	if selected == null:
+		if _hovered != null and GameState.echoes.size() < 2:
+			return ["Keep a second Echo to braid it with Run %d into one Sconce." % _hovered.run_number, MUTED]
 		if _hovered != null:
 			if _hovered.members().size() >= GameState.CHORUS_MAX:
 				return ["Run %d is a full Chorus: %d runs is the most one Sconce holds." % [_hovered.run_number, GameState.CHORUS_MAX], MUTED]
@@ -434,6 +481,7 @@ func _braid_hint() -> Array:
 		return ["Braid two Echoes into one Sconce (both still walk). Click one, then another.", MUTED]
 	var cost := GameState.braid_cost(selected)
 	if _hovered != null and _hovered != selected:
+		cost = GameState.braid_cost(selected, _hovered)
 		if GameState.can_braid(selected, _hovered):
 			return ["Click to braid Run %d into Run %d for %d Tallow." % [_hovered.run_number, selected.run_number, cost], Color(selected.hue(), 0.95)]
 		if selected.members().size() + _hovered.members().size() > GameState.CHORUS_MAX:

@@ -12,6 +12,19 @@ var tallow := 0
 var total_burned := 0
 ## Lamp Tree levels by node id.
 var tree_levels := {}
+## Each Dawn pays one Daylight and the sun takes every Echo.
+var daylight := 0
+var dawns := 0
+## When the first Dawn came: the run, and the minutes of night played before it.
+var first_dawn_run := 0
+var first_dawn_seconds := 0.0
+## Seconds of night played across every run.
+var night_seconds := 0.0
+## Unix time of the last save. The Vigil pays Tallow for the time away since then.
+var last_seen := 0.0
+## What the Vigil paid on this launch, for the title screen to mention once.
+var vigil_paid := 0
+var vigil_away := 0.0
 
 ## Where progress is saved, and whether changes save themselves (tests turn it off).
 var save_path := SaveGame.PATH
@@ -20,14 +33,22 @@ var autosave := true
 ## Each braid costs this much Tallow per run already in the Chorus.
 const BRAID_COST := 40
 const CHORUS_MAX := 3
+## The Vigil: while the game is closed, kept Echoes keep watch and earn Tallow.
+## Time away below the minimum pays nothing; time beyond the cap is not counted.
+const VIGIL_MIN_AWAY := 600.0
+const VIGIL_MAX_AWAY := 12.0 * 3600.0
+## Tallow per hour away, per shadow the kept Echoes burned in their own runs.
+const VIGIL_RATE := 0.02
 
 
 func _ready() -> void:
 	SaveGame.load_into(self, save_path)
+	collect_vigil(Time.get_unix_time_from_system())
 
 
 func save() -> void:
 	if autosave:
+		last_seen = Time.get_unix_time_from_system()
 		SaveGame.save(self, save_path)
 
 
@@ -40,6 +61,14 @@ func reset() -> void:
 	tallow = 0
 	total_burned = 0
 	tree_levels = {}
+	daylight = 0
+	dawns = 0
+	first_dawn_run = 0
+	first_dawn_seconds = 0.0
+	night_seconds = 0.0
+	last_seen = 0.0
+	vigil_paid = 0
+	vigil_away = 0.0
 
 
 func stats() -> Dictionary:
@@ -77,6 +106,8 @@ func try_keep(rec: EchoRecording) -> bool:
 ## Resolves a full Sconce: `new_rec` is kept unless it is the one let go.
 func let_go_of(chosen: EchoRecording, new_rec: EchoRecording) -> void:
 	let_go.append(chosen)
+	if let_go.size() > SaveGame.LET_GO_KEPT:
+		let_go.pop_front()
 	let_go_count += 1
 	if chosen != new_rec:
 		echoes.erase(chosen)
@@ -115,8 +146,10 @@ func buy(id: String) -> bool:
 	return true
 
 
-## Tallow earned from a night: shadows burned, weighted by kind.
-func award(burned_by_kind: Dictionary) -> int:
+## Tallow earned from a night: shadows burned, weighted by kind. `seconds` is
+## how long the night lasted, added to the total time played.
+func award(burned_by_kind: Dictionary, seconds := 0.0) -> int:
+	night_seconds += seconds
 	var raw := 0.0
 	for kind in burned_by_kind:
 		raw += burned_by_kind[kind] * Tuning.TALLOW_PER_KIND.get(kind, 1.0)
@@ -126,23 +159,68 @@ func award(burned_by_kind: Dictionary) -> int:
 	return earned
 
 
+# --- Dawn and the Vigil ------------------------------------------------------------
+
+## The night is held until 6 AM: one Daylight, and the sun takes every Echo.
+## Returns true for the first Dawn.
+func greet_dawn(rec: EchoRecording) -> bool:
+	best_time = maxf(best_time, rec.duration)
+	dawns += 1
+	daylight += 1
+	if dawns == 1:
+		first_dawn_run = rec.run_number
+		first_dawn_seconds = night_seconds
+	echoes.clear()
+	return dawns == 1
+
+
+## Tallow per hour the kept Echoes earn while the game is closed.
+func vigil_rate() -> float:
+	var burned := 0
+	for rec in all_recordings():
+		burned += rec.burned
+	return burned * VIGIL_RATE * stats()["tallow_mult"]
+
+
+## Pays the Vigil for the time since the last save. Returns the Tallow paid.
+func collect_vigil(now: float) -> int:
+	vigil_paid = 0
+	vigil_away = 0.0
+	if last_seen <= 0.0:
+		return 0
+	var away := now - last_seen
+	if away < VIGIL_MIN_AWAY:
+		return 0
+	vigil_away = minf(away, VIGIL_MAX_AWAY)
+	vigil_paid = int(vigil_rate() * vigil_away / 3600.0)
+	tallow += vigil_paid
+	# Count each stretch away once, even if the game closes before the next save.
+	last_seen = now
+	if vigil_paid > 0:
+		save()
+	return vigil_paid
+
+
 # --- Braiding ---------------------------------------------------------------------
 
-func braid_cost(into: EchoRecording) -> int:
-	return BRAID_COST * into.members().size()
+## The cost grows with the size of the Chorus the braid makes, whichever side
+## is braided into which. Without `other`, the cost of braiding in a single run.
+func braid_cost(into: EchoRecording, other: EchoRecording = null) -> int:
+	var joining := 1 if other == null else other.members().size()
+	return BRAID_COST * (into.members().size() + joining - 1)
 
 
 func can_braid(into: EchoRecording, other: EchoRecording) -> bool:
 	return into != other and echoes.has(into) and echoes.has(other) \
 		and into.members().size() + other.members().size() <= CHORUS_MAX \
-		and tallow >= braid_cost(into)
+		and tallow >= braid_cost(into, other)
 
 
 ## Braids `other` (and anything braided into it) into `into`, freeing a Sconce.
 func braid(into: EchoRecording, other: EchoRecording) -> bool:
 	if not can_braid(into, other):
 		return false
-	tallow -= braid_cost(into)
+	tallow -= braid_cost(into, other)
 	into.chorus.append_array(other.members())
 	other.chorus.clear()
 	echoes.erase(other)

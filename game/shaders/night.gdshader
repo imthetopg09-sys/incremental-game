@@ -11,6 +11,10 @@ uniform vec2 rect_size = vec2(1280.0, 720.0);
 uniform vec3 night_color : source_color = vec3(0.02, 0.02, 0.032);
 // A little light everywhere so black shadows read as silhouettes in the dark.
 uniform float ambient = 0.06;
+// Dawn: 0 all night, rising to 1 as the sky pales. Daylight then sweeps in from
+// the east edge: pixels with UV.x above sun_front are in the sun.
+uniform float dawn = 0.0;
+uniform float sun_front = 1.3;
 
 float hash(vec2 p) {
 	return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
@@ -51,6 +55,15 @@ void fragment() {
 	lit = 1.0 - exp(-lit);
 	halo = (1.0 - exp(-halo * 4.0)) * 0.25;
 	vec3 col = night_color + ground * (lit * 1.35 + ambient) + halo;
+	if (dawn > 0.0) {
+		// The sky pales first, then the sun line crosses the square.
+		col += ground * vec3(0.10, 0.08, 0.16) * dawn;
+		float day = smoothstep(sun_front - 0.04, sun_front + 0.10, UV.x) * dawn;
+		vec3 day_col = ground * vec3(1.85, 1.55, 1.25) + vec3(0.08, 0.06, 0.05) + halo * 0.5;
+		col = mix(col, day_col, day);
+		float band = exp(-pow((UV.x - sun_front) * 16.0, 2.0)) * dawn;
+		col += band * vec3(1.0, 0.72, 0.42) * 0.45;
+	}
 	// Dither to hide banding in the dark gradients.
 	col += (hash(p + fract(TIME)) - 0.5) / 255.0;
 	COLOR = vec4(col, 1.0);

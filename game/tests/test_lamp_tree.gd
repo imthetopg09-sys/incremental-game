@@ -16,6 +16,7 @@ func _rec(run: int) -> EchoRecording:
 func _boot(t) -> Node:
 	var tree := (load(SCENE) as PackedScene).instantiate()
 	t.root.add_child(tree)
+	tree.input_delay = 0.0
 	for i in 3:
 		await t.process_frame
 	return tree

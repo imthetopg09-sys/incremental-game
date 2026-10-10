@@ -51,8 +51,11 @@ func hue() -> Color:
 func record_until(time: float, pos: Vector2) -> void:
 	# The epsilon absorbs float drift from accumulating dt, so sample i lands on
 	# the step at time i / RATE instead of one step late.
+	# Stored at the quarter-pixel precision the save keeps, so an Echo loaded from
+	# disk walks exactly the path it walked in memory.
+	var stored := (pos * 4.0).round() / 4.0
 	while points.size() <= int(time * RATE + 1e-6):
-		points.append(pos)
+		points.append(stored)
 	duration = maxf(duration, time)
 
 
