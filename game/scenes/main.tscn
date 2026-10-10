@@ -65,7 +65,7 @@ grow_horizontal = 2
 grow_vertical = 0
 theme_override_colors/font_color = Color(0.85, 0.78, 0.68, 0.55)
 theme_override_font_sizes/font_size = 18
-text = "Move the lantern. Click to strike a match."
+text = "Click to strike a match. Esc quits."
 horizontal_alignment = 1
 
 [node name="Version" type="Label" parent="."]

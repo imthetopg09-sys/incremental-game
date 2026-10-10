@@ -1,0 +1,167 @@
+[gd_scene load_steps=6 format=3]
+
+[ext_resource type="Script" path="res://scripts/night.gd" id="1_night"]
+[ext_resource type="Shader" path="res://shaders/night.gdshader" id="2_shader"]
+
+[sub_resource type="ShaderMaterial" id="ShaderMaterial_ground"]
+shader = ExtResource("2_shader")
+
+[sub_resource type="CanvasItemMaterial" id="CanvasItemMaterial_add"]
+blend_mode = 1
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_panel"]
+bg_color = Color(0.015, 0.012, 0.02, 0.78)
+corner_radius_top_left = 14
+corner_radius_top_right = 14
+corner_radius_bottom_right = 14
+corner_radius_bottom_left = 14
+content_margin_left = 36.0
+content_margin_top = 24.0
+content_margin_right = 36.0
+content_margin_bottom = 24.0
+
+[node name="Night" type="Node2D"]
+script = ExtResource("1_night")
+
+[node name="Background" type="ColorRect" parent="."]
+material = SubResource("ShaderMaterial_ground")
+offset_right = 1280.0
+offset_bottom = 720.0
+mouse_filter = 2
+
+[node name="Entities" type="Node2D" parent="."]
+
+[node name="Dim" type="ColorRect" parent="."]
+offset_right = 1280.0
+offset_bottom = 720.0
+mouse_filter = 2
+color = Color(0, 0, 0, 0)
+
+[node name="Trails" type="Node2D" parent="."]
+material = SubResource("CanvasItemMaterial_add")
+
+[node name="HUD" type="CanvasLayer" parent="."]
+
+[node name="Clock" type="Label" parent="HUD"]
+unique_name_in_owner = true
+anchors_preset = 5
+anchor_left = 0.5
+anchor_right = 0.5
+offset_left = -150.0
+offset_top = 14.0
+offset_right = 150.0
+offset_bottom = 54.0
+grow_horizontal = 2
+theme_override_colors/font_color = Color(1, 0.86, 0.62, 0.9)
+theme_override_font_sizes/font_size = 30
+text = "12:00 AM"
+horizontal_alignment = 1
+
+[node name="RunInfo" type="Label" parent="HUD"]
+unique_name_in_owner = true
+offset_left = 18.0
+offset_top = 16.0
+offset_right = 418.0
+offset_bottom = 44.0
+theme_override_colors/font_color = Color(0.85, 0.78, 0.68, 0.7)
+theme_override_font_sizes/font_size = 18
+text = "Run 1"
+
+[node name="Burned" type="Label" parent="HUD"]
+unique_name_in_owner = true
+anchors_preset = 1
+anchor_left = 1.0
+anchor_right = 1.0
+offset_left = -318.0
+offset_top = 16.0
+offset_right = -18.0
+offset_bottom = 44.0
+grow_horizontal = 0
+theme_override_colors/font_color = Color(0.85, 0.78, 0.68, 0.7)
+theme_override_font_sizes/font_size = 18
+text = "0 burned"
+horizontal_alignment = 2
+
+[node name="Toast" type="Label" parent="HUD"]
+unique_name_in_owner = true
+anchors_preset = 5
+anchor_left = 0.5
+anchor_right = 0.5
+offset_left = -400.0
+offset_top = 62.0
+offset_right = 400.0
+offset_bottom = 92.0
+grow_horizontal = 2
+theme_override_colors/font_color = Color(0.92, 0.86, 0.76, 1)
+theme_override_font_sizes/font_size = 20
+horizontal_alignment = 1
+
+[node name="FlameBar" type="Control" parent="HUD"]
+unique_name_in_owner = true
+offset_left = 18.0
+offset_top = 48.0
+offset_right = 218.0
+offset_bottom = 54.0
+mouse_filter = 2
+
+[node name="Overlay" type="Control" parent="HUD"]
+unique_name_in_owner = true
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+
+[node name="Panel" type="PanelContainer" parent="HUD/Overlay"]
+layout_mode = 1
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_panel")
+
+[node name="Box" type="VBoxContainer" parent="HUD/Overlay/Panel"]
+layout_mode = 2
+mouse_filter = 2
+alignment = 1
+theme_override_constants/separation = 14
+
+[node name="OverlayTitle" type="Label" parent="HUD/Overlay/Panel/Box"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(1, 0.86, 0.62, 1)
+theme_override_colors/font_shadow_color = Color(1, 0.55, 0.15, 0.3)
+theme_override_constants/shadow_outline_size = 10
+theme_override_font_sizes/font_size = 52
+text = "Midnight, again."
+horizontal_alignment = 1
+
+[node name="OverlayBody" type="Label" parent="HUD/Overlay/Panel/Box"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.92, 0.86, 0.76, 0.9)
+theme_override_colors/font_outline_color = Color(0, 0, 0, 0.8)
+theme_override_constants/outline_size = 6
+theme_override_font_sizes/font_size = 20
+horizontal_alignment = 1
+
+[node name="Choices" type="VBoxContainer" parent="HUD/Overlay/Panel/Box"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 4
+mouse_filter = 2
+theme_override_constants/separation = 8
+
+[node name="OverlayHint" type="Label" parent="HUD/Overlay/Panel/Box"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.85, 0.78, 0.68, 0.6)
+theme_override_font_sizes/font_size = 18
+text = "Click to light the next night."
+horizontal_alignment = 1
