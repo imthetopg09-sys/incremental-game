@@ -15,6 +15,9 @@ uniform float ambient = 0.06;
 // the east edge: pixels with UV.x above sun_front are in the sun.
 uniform float dawn = 0.0;
 uniform float sun_front = 1.3;
+// Light 0 is the lantern; every other light fades out within this many pixels of it,
+// because the lantern outshines its Echoes there (they do not burn inside it).
+uniform float outshine_radius = 0.0;
 
 float hash(vec2 p) {
 	return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
@@ -48,6 +51,9 @@ void fragment() {
 		float core = 1.0 - smoothstep(L.z * 0.9, L.z * 1.05, d);
 		float spill = exp(-(d * d) / (L.z * L.z * 2.4));
 		vec3 c = light_colors[i].rgb * L.w;
+		if (i > 0 && outshine_radius > 0.0) {
+			c *= smoothstep(outshine_radius * 0.75, outshine_radius, length(p - lights[0].xy));
+		}
 		lit += (0.55 * spill + 0.45 * core) * c;
 		halo += exp(-d / (L.z * 2.6)) * 0.12 * c;
 	}

@@ -96,7 +96,7 @@ func _ready() -> void:
 	if Array(args).any(func(a): return a == "--autopilot" or a.begins_with("--demo-") or a.begins_with("--skip-to=")):
 		GameState.autosave = false
 	if args.has("--autopilot"):
-		_autopilot = Bot.new("kite")
+		_autopilot = Bot.new("kite", GameState.run_number)
 	for a in args:
 		if a.begins_with("--demo-echoes=") and GameState.run_number == 1:
 			GameState.make_demo_echoes(int(a.get_slice("=", 1)))
@@ -700,6 +700,7 @@ func _update_lights() -> void:
 	mat.set_shader_parameter("lights", lights)
 	mat.set_shader_parameter("light_colors", colors)
 	mat.set_shader_parameter("light_count", lights.size())
+	mat.set_shader_parameter("outshine_radius", Tuning.ECHO_OUTSHINE_RADIUS if _live() else 0.0)
 	mat.set_shader_parameter("rect_size", background.size)
 
 

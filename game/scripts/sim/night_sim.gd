@@ -271,8 +271,16 @@ func _refresh_casters() -> void:
 		casters.append({"pos": echoes[i].position_at(t), "boons": echoes[i].boons_at(t), "light": i})
 
 
+## The lantern outshines its Echoes: close to it, Echo light and Echo Boons do not
+## burn, so an Echo can thin the crowd coming at you but cannot be stood on as a shield.
+func outshone(pos: Vector2) -> bool:
+	return pos.distance_squared_to(player_pos) < Tuning.ECHO_OUTSHINE_RADIUS * Tuning.ECHO_OUTSHINE_RADIUS
+
+
 func _hurt(s: Shadow, amount: float, light: int) -> void:
 	if s.hp <= 0.0:
+		return
+	if light >= 0 and outshone(s.pos):
 		return
 	s.hp -= amount
 	s.burning = 0.0
@@ -312,7 +320,7 @@ func _boons(dt: float) -> void:
 
 		var flare: int = lv.get("flare", 0)
 		if flare > 0 and t >= tm["flare"]:
-			var target := _nearest(pos, Tuning.FLARE_RANGE, [])
+			var target := _nearest(pos, Tuning.FLARE_RANGE, [], key >= 0)
 			if target != null:
 				bolts.append({"pos": pos, "prev_pos": pos, "target": target, "dmg": Tuning.FLARE_DAMAGE * (1.0 + 0.35 * (flare - 1)) * burn_mult, "light": key, "age": 0.0})
 				events.append({"type": "flare", "light": key})
@@ -336,7 +344,7 @@ func _boons(dt: float) -> void:
 
 		var spark: int = lv.get("spark", 0)
 		if spark > 0 and t >= tm["spark"]:
-			var first := _nearest(pos, Tuning.SPARK_RANGE, [])
+			var first := _nearest(pos, Tuning.SPARK_RANGE, [], key >= 0)
 			if first != null:
 				tm["spark"] = t + Tuning.SPARK_INTERVAL
 				var hit: Array = [first]
@@ -344,7 +352,7 @@ func _boons(dt: float) -> void:
 				var dmg := (Tuning.SPARK_DAMAGE + 3.0 * (spark - 1)) * burn_mult
 				_hurt(first, dmg, key)
 				for j in Tuning.SPARK_JUMPS + spark - 1:
-					var next := _nearest(hit[hit.size() - 1].pos, Tuning.SPARK_JUMP, hit)
+					var next := _nearest(hit[hit.size() - 1].pos, Tuning.SPARK_JUMP, hit, key >= 0)
 					if next == null:
 						break
 					hit.append(next)
@@ -391,11 +399,11 @@ func moth_positions(c: Dictionary) -> PackedVector2Array:
 	return out
 
 
-func _nearest(from: Vector2, max_dist: float, exclude: Array) -> Shadow:
+func _nearest(from: Vector2, max_dist: float, exclude: Array, skip_outshone := false) -> Shadow:
 	var best: Shadow = null
 	var best_d := max_dist * max_dist
 	for s in shadows:
-		if s.hp <= 0.0 or exclude.has(s):
+		if s.hp <= 0.0 or exclude.has(s) or (skip_outshone and outshone(s.pos)):
 			continue
 		var d := s.pos.distance_squared_to(from)
 		if d < best_d:

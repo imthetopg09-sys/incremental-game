@@ -233,7 +233,7 @@ func make_demo_echoes(count: int) -> void:
 	tree_levels["extra_sconce"] = clampi(count - Tuning.START_SCONCES, 0, Upgrades.max_level("extra_sconce"))
 	for i in count:
 		var sim := NightSim.new(all_recordings(), Tuning.NIGHT_SEED, run_number, stats())
-		var bot := Bot.new("kite")
+		var bot := Bot.new("kite", run_number)
 		while not sim.is_over():
 			sim.step(1.0 / 30.0, bot.steer(sim))
 			if sim.pending_level_ups > 0:
